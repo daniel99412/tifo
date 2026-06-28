@@ -245,9 +245,15 @@ func (md *MatchDetail) SetError(err string) {
 	md.Error = err
 }
 
-func (md MatchDetail) Render(width, height int) string {
+func (md *MatchDetail) Render(width, height int) string {
 	if width < 5 || height < 5 {
 		return ""
+	}
+
+	pad := 2
+	width -= pad * 2
+	if width < 10 {
+		width = 10
 	}
 
 	var lines []string
@@ -266,36 +272,32 @@ func (md MatchDetail) Render(width, height int) string {
 
 	homeHeaderColor := lipgloss.Color("255")
 	awayHeaderColor := lipgloss.Color("255")
-	var homeBg, awayBg lipgloss.Color
 	if md.Details != nil && md.Details.Events.ExtraInfo != nil {
 		if md.Details.Events.ExtraInfo.HomeColor != "" {
-			homeHeaderColor = lipgloss.Color("#" + md.Details.Events.ExtraInfo.HomeColor)
-		}
-		if md.Details.Events.ExtraInfo.HomeAltColor != "" {
-			homeBg = lipgloss.Color("#" + md.Details.Events.ExtraInfo.HomeAltColor)
+			c := md.Details.Events.ExtraInfo.HomeColor
+			if !strings.HasPrefix(c, "#") { c = "#" + c }
+			homeHeaderColor = lipgloss.Color(c)
 		}
 		if md.Details.Events.ExtraInfo.AwayColor != "" {
-			awayHeaderColor = lipgloss.Color("#" + md.Details.Events.ExtraInfo.AwayColor)
+			c := md.Details.Events.ExtraInfo.AwayColor
+			if !strings.HasPrefix(c, "#") { c = "#" + c }
+			awayHeaderColor = lipgloss.Color(c)
 		}
-		if md.Details.Events.ExtraInfo.AwayAltColor != "" {
-			awayBg = lipgloss.Color("#" + md.Details.Events.ExtraInfo.AwayAltColor)
-		}
 	}
 
-	homeNameStyle := lipgloss.NewStyle().Width(25).Align(lipgloss.Right).Bold(true).Foreground(homeHeaderColor)
-	if homeBg != "" {
-		homeNameStyle = homeNameStyle.Background(homeBg)
-	}
-	awayNameStyle := lipgloss.NewStyle().Width(25).Align(lipgloss.Left).Bold(true).Foreground(awayHeaderColor)
-	if awayBg != "" {
-		awayNameStyle = awayNameStyle.Background(awayBg)
-	}
+	bulletHome := lipgloss.NewStyle().Foreground(homeHeaderColor).Render("●")
+	bulletAway := lipgloss.NewStyle().Foreground(awayHeaderColor).Render("●")
 
-	homeCol := homeNameStyle.Render(md.HomeName)
-	awayCol := awayNameStyle.Render(md.AwayName)
+	homeTeamStyle := lipgloss.NewStyle().Bold(true).Foreground(homeHeaderColor)
+	awayTeamStyle := lipgloss.NewStyle().Bold(true).Foreground(awayHeaderColor)
 
-	matchup := lipgloss.JoinHorizontal(lipgloss.Center,
-		homeCol, " ", scoreCell, " ", awayCol,
+	homeCol := homeTeamStyle.Render(bulletHome + " " + md.HomeName)
+	awayCol := awayTeamStyle.Render(md.AwayName + " " + bulletAway)
+
+	matchup := lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Render(
+		lipgloss.JoinHorizontal(lipgloss.Center,
+			homeCol, "  ", scoreCell, "  ", awayCol,
+		),
 	)
 	lines = append(lines, matchup)
 
@@ -339,10 +341,10 @@ func (md MatchDetail) Render(width, height int) string {
 	lines = append(lines, mdBackStyle.Render("←/→ tabs · u/d scroll · esc volver"))
 
 	body := lipgloss.JoinVertical(lipgloss.Top, lines...)
-	return body
+	return lipgloss.NewStyle().PaddingLeft(pad).PaddingRight(pad).Render(body)
 }
 
-func (md MatchDetail) renderTabContent(width, height int) string {
+func (md *MatchDetail) renderTabContent(width, height int) string {
 	if md.Error != "" {
 		return mdInfoStyle.Render(fmt.Sprintf("error: %s", md.Error))
 	}
@@ -414,7 +416,7 @@ func displayVal(s string) string {
 	return s
 }
 
-func (md MatchDetail) renderStats(width, height int) string {
+func (md *MatchDetail) renderStats(width, height int) string {
 	if md.Details == nil || len(md.Details.Stats) == 0 {
 		return mdInfoStyle.Render("sin estadísticas")
 	}
@@ -423,10 +425,14 @@ func (md MatchDetail) renderStats(width, height int) string {
 	awayColor := lipgloss.Color("255")
 	if md.Details.Events.ExtraInfo != nil {
 		if md.Details.Events.ExtraInfo.HomeColor != "" {
-			homeColor = lipgloss.Color("#" + md.Details.Events.ExtraInfo.HomeColor)
+			c := md.Details.Events.ExtraInfo.HomeColor
+			if !strings.HasPrefix(c, "#") { c = "#" + c }
+			homeColor = lipgloss.Color(c)
 		}
 		if md.Details.Events.ExtraInfo.AwayColor != "" {
-			awayColor = lipgloss.Color("#" + md.Details.Events.ExtraInfo.AwayColor)
+			c := md.Details.Events.ExtraInfo.AwayColor
+			if !strings.HasPrefix(c, "#") { c = "#" + c }
+			awayColor = lipgloss.Color(c)
 		}
 	}
 
@@ -439,8 +445,8 @@ func (md MatchDetail) renderStats(width, height int) string {
 	}
 	barW := maxStatW
 
-	homeStyle := lipgloss.NewStyle().Width(6).Align(lipgloss.Right).Foreground(homeColor)
-	awayStyle := lipgloss.NewStyle().Width(6).Align(lipgloss.Left).Foreground(awayColor)
+	homeNumStyle := lipgloss.NewStyle().Width(6).Align(lipgloss.Right).Bold(true).Foreground(homeColor)
+	awayNumStyle := lipgloss.NewStyle().Width(6).Align(lipgloss.Left).Bold(true).Foreground(awayColor)
 
 	var lines []string
 	for _, cat := range md.Details.Stats {
@@ -449,10 +455,27 @@ func (md MatchDetail) renderStats(width, height int) string {
 			labelWidth := barW + 12
 			lines = append(lines, mdInfoStyle.Width(labelWidth).Align(lipgloss.Center).Render(stat.Label))
 			bar := statBar(stat.Home, stat.Away, barW)
+			barColor := lipgloss.Color("240")
+			homeVal := displayVal(stat.Home)
+			awayVal := displayVal(stat.Away)
+			// Color the bar with the higher team's color
+			if h, hOK := parseFloatVal(stat.Home); hOK {
+				if a, aOK := parseFloatVal(stat.Away); aOK {
+					if h >= a {
+						barColor = homeColor
+					} else {
+						barColor = awayColor
+					}
+				} else {
+					barColor = homeColor
+				}
+			} else if _, aOK := parseFloatVal(stat.Away); aOK {
+				barColor = awayColor
+			}
 			row := lipgloss.JoinHorizontal(lipgloss.Top,
-				homeStyle.Render(displayVal(stat.Home)),
-				lipgloss.NewStyle().Width(barW).Align(lipgloss.Center).Render(bar),
-				awayStyle.Render(displayVal(stat.Away)),
+				homeNumStyle.Render(homeVal),
+				lipgloss.NewStyle().Width(barW).Align(lipgloss.Center).Foreground(barColor).Render(bar),
+				awayNumStyle.Render(awayVal),
 			)
 			lines = append(lines, row)
 		}
@@ -460,23 +483,25 @@ func (md MatchDetail) renderStats(width, height int) string {
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Top, lines...)
-	return md.applyScroll(body, width, height)
+	centered := lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Render(body)
+	return md.applyScroll(centered, width, height)
 }
 
-func (md MatchDetail) renderLineup(width, height int) string {
+func (md *MatchDetail) renderLineup(width, height int) string {
 	if md.Details == nil {
 		return mdInfoStyle.Render("sin alineaciones")
 	}
 
 	lu := md.Details.Lineup
 
-	colW := (width - 4) / 3
-	if colW < 10 {
-		colW = 10
-	}
+	homeW := width * 20 / 100
+	centerW := width * 60 / 100
+	awayW := width * 20 / 100
+	if homeW < 10 { homeW = 10 }
+	if awayW < 10 { awayW = 10 }
 
-	homeLines := md.teamColumn(lu.HomeFormation, lu.HomeCoach, lu.HomeStarters, lu.HomeSubs, colW)
-	awayLines := md.teamColumn(lu.AwayFormation, lu.AwayCoach, lu.AwayStarters, lu.AwaySubs, colW)
+	homeLines := md.teamColumn(lu.HomeFormation, lu.HomeCoach, lu.HomeStarters, lu.HomeSubs, homeW)
+	awayLines := md.teamColumn(lu.AwayFormation, lu.AwayCoach, lu.AwayStarters, lu.AwaySubs, awayW)
 
 	maxLen := len(homeLines)
 	if len(awayLines) > maxLen {
@@ -493,7 +518,11 @@ func (md MatchDetail) renderLineup(width, height int) string {
 		if i < len(awayLines) {
 			a = awayLines[i]
 		}
-		row := lipgloss.JoinHorizontal(lipgloss.Top, h, lipgloss.NewStyle().Width(4).Render(""), a)
+		row := lipgloss.JoinHorizontal(lipgloss.Top,
+			h,
+			lipgloss.NewStyle().Width(centerW).Render(""),
+			a,
+		)
 		rendered = append(rendered, row)
 	}
 
@@ -518,7 +547,7 @@ func (md MatchDetail) teamColumn(formation, coach string, starters, subs []Playe
 
 	for _, p := range starters {
 		line := lipgloss.NewStyle().Width(colW).
-			Foreground(lipgloss.Color("255")).Render(fmt.Sprintf("  %s  %s", p.Number, p.Name))
+			Foreground(lipgloss.Color("255")).Render(fmt.Sprintf("  %2s  %s", p.Number, p.Name))
 		lines = append(lines, line)
 	}
 
@@ -534,42 +563,65 @@ func (md MatchDetail) teamColumn(formation, coach string, starters, subs []Playe
 
 	for _, p := range subs {
 		line := lipgloss.NewStyle().Width(colW).
-			Foreground(lipgloss.Color("240")).Render(fmt.Sprintf("  %s  %s", p.Number, p.Name))
+			Foreground(lipgloss.Color("240")).Render(fmt.Sprintf("  %2s  %s", p.Number, p.Name))
 		lines = append(lines, line)
 	}
 
 	return lines
 }
 
-func (md MatchDetail) renderEvents(width, height int) string {
-	if md.Details == nil {
+func (md *MatchDetail) renderEvents(width, height int) string {
+	if md.Details == nil || len(md.Details.Events.Items) == 0 {
 		return mdInfoStyle.Render("sin eventos")
 	}
 
-	var lines []string
-
-	if len(md.Details.Events.Items) == 0 {
-		if len(lines) == 0 {
-			return mdInfoStyle.Render("sin eventos")
-		}
-		body := lipgloss.JoinVertical(lipgloss.Top, lines...)
-		return md.applyScroll(body, width, height)
-	}
-
-	lines = append(lines, mdSectionHeader.Render("Eventos"))
+	var eventLines []string
 	for _, ev := range md.Details.Events.Items {
 		timeCell := mdTimeStyle.Render(ev.Minute)
-
 		typeCell := md.eventTypeCell(ev)
-
 		descCell := md.eventDesc(ev)
-
 		row := lipgloss.JoinHorizontal(lipgloss.Top, timeCell, typeCell, descCell)
-		lines = append(lines, row)
+		eventLines = append(eventLines, row)
 	}
 
-	body := lipgloss.JoinVertical(lipgloss.Top, lines...)
-	return md.applyScroll(body, width, height)
+	eventColW := width - 24
+	if eventColW < 30 {
+		eventColW = 30
+	}
+	legendW := 22
+
+	eventsBody := lipgloss.JoinVertical(lipgloss.Top, eventLines...)
+	scrollPart := md.applyScroll(eventsBody, eventColW, height)
+
+	// Left: events
+	left := lipgloss.NewStyle().Width(eventColW).Render(scrollPart)
+
+	// Right: symbol legend
+	var legLines []string
+	legLines = append(legLines, mdSectionHeader.Render("Simbología"))
+	for _, s := range md.symbolLegend() {
+		legLines = append(legLines, lipgloss.NewStyle().Width(legendW).Foreground(lipgloss.Color("240")).Render(s))
+	}
+	right := lipgloss.JoinVertical(lipgloss.Top, legLines...)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+}
+
+func (md MatchDetail) symbolLegend() []string {
+	legend := []struct{ key, label string }{
+		{"GOL", "Gol"}, {"CAR", "Tarjeta"}, {"SUB", "Sustitución"},
+		{"SHO", "Tiro"}, {"PEN", "Penal"}, {"PAR", "Penal atajado"},
+		{"VAR", "VAR"}, {"REV", "Revisión"}, {"AT", "Añadido"},
+		{"HT", "Descanso"}, {"FT", "Final"}, {"KO", "Inicio"},
+		{"S2", "2do tiempo"}, {"H2O", "Hidratación"}, {"LES", "Lesión"},
+		{"PAU", "Pausa"}, {"CONT", "Continúa"},
+	}
+	var out []string
+	for _, l := range legend {
+		sym := mdTypeStyle.Render(l.key)
+		out = append(out, sym+"  "+l.label)
+	}
+	return out
 }
 
 func (md MatchDetail) eventTypeCell(ev EventItem) string {
@@ -798,7 +850,7 @@ func (md MatchDetail) eventDesc(ev EventItem) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
 
-func (md MatchDetail) renderH2H(width, height int) string {
+func (md *MatchDetail) renderH2H(width, height int) string {
 	if md.Details == nil {
 		return mdInfoStyle.Render("sin datos H2H")
 	}
@@ -815,40 +867,75 @@ func (md MatchDetail) renderH2H(width, height int) string {
 	return md.applyScroll(body, width, height)
 }
 
-func (md MatchDetail) renderInjuries(width, height int) string {
+func (md *MatchDetail) renderInjuries(width, height int) string {
 	if md.Details == nil {
 		return mdInfoStyle.Render("sin datos de lesiones")
 	}
 
 	inf := md.Details.Injuries
-	var lines []string
+	colW := (width - 4) / 2
+	if colW < 15 {
+		colW = 15
+	}
 
-	if len(inf.Home) > 0 {
-		lines = append(lines, mdSectionHeader.Render(fmt.Sprintf("%s - Lesiones/Suspensiones", md.HomeName)))
-		for _, p := range inf.Home {
-			line := fmt.Sprintf("  %s (%s) — %s", p.Name, p.Type, p.Return)
-			lines = append(lines, mdInjuryStyle.Render(line))
+	homeLines := md.injuryColumn(md.HomeName, inf.Home, colW)
+	awayLines := md.injuryColumn(md.AwayName, inf.Away, colW)
+
+	if len(homeLines) == 0 && len(awayLines) == 0 {
+		return mdInfoStyle.Render("sin jugadores lesionados")
+	}
+
+	maxLen := len(homeLines)
+	if len(awayLines) > maxLen {
+		maxLen = len(awayLines)
+	}
+
+	var rendered []string
+	for i := 0; i < maxLen; i++ {
+		h := ""
+		a := ""
+		if i < len(homeLines) {
+			h = homeLines[i]
 		}
-		lines = append(lines, "")
-	}
-
-	if len(inf.Away) > 0 {
-		lines = append(lines, mdSectionHeader.Render(fmt.Sprintf("%s - Lesiones/Suspensiones", md.AwayName)))
-		for _, p := range inf.Away {
-			line := fmt.Sprintf("  %s (%s) — %s", p.Name, p.Type, p.Return)
-			lines = append(lines, mdInjuryStyle.Render(line))
+		if i < len(awayLines) {
+			a = awayLines[i]
 		}
+		row := lipgloss.JoinHorizontal(lipgloss.Top, h, lipgloss.NewStyle().Width(4).Render(""), a)
+		rendered = append(rendered, row)
 	}
 
-	if len(inf.Home) == 0 && len(inf.Away) == 0 {
-		lines = append(lines, mdInfoStyle.Render("sin jugadores lesionados"))
-	}
-
-	body := lipgloss.JoinVertical(lipgloss.Top, lines...)
+	body := lipgloss.JoinVertical(lipgloss.Top, rendered...)
 	return md.applyScroll(body, width, height)
 }
 
-func (md MatchDetail) applyScroll(body string, width, height int) string {
+func (md MatchDetail) injuryColumn(teamName string, players []InjuryPlayer, colW int) []string {
+	if len(players) == 0 {
+		return nil
+	}
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Width(colW).Bold(true).
+		Foreground(lipgloss.Color("255")).Render(teamName))
+	lines = append(lines, "")
+
+	for _, p := range players {
+		tag := p.Type
+		if tag == "" {
+			tag = "lesión"
+		}
+		ret := p.Return
+		if ret == "" {
+			ret = "?"
+		}
+		line := lipgloss.NewStyle().Width(colW).
+			Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("  %s (%s) — %s", p.Name, tag, ret))
+		lines = append(lines, line)
+	}
+
+	return lines
+}
+
+func (md *MatchDetail) applyScroll(body string, width, height int) string {
 	allLines := strings.Split(body, "\n")
 	total := len(allLines)
 

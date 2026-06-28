@@ -34,3 +34,4 @@ go.work.sum
 .idea/
 .vscode/
 tmp/
+tifo_mappings.db

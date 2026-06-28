@@ -5,9 +5,16 @@ import (
 	"log"
 	"sort"
 	"strings"
-	"tifo/enricher"
-	"tifo/espn"
-	"tifo/fotmob"
+	"tifo/internal/domain"
+	"tifo/internal/enrich"
+	"tifo/internal/persistence/sqlite"
+	fotmobProvider "tifo/internal/providers/fotmob"
+	espnProvider "tifo/internal/providers/espn"
+	fotmob "tifo/fotmob"
+	espn "tifo/espn"
+	"tifo/internal/providers"
+	"tifo/internal/resolver"
+	"tifo/internal/services"
 	"tifo/ipapi"
 	"tifo/tui/components"
 	"time"
@@ -29,6 +36,7 @@ var (
 			Foreground(lipgloss.Color("236"))
 
 	footerStyle = lipgloss.NewStyle().
+			Width(80).
 			Align(lipgloss.Center).
 			Foreground(lipgloss.Color("240")).
 			Italic(true)
@@ -67,48 +75,75 @@ var (
 )
 
 type Model struct {
-	width        int
-	height       int
-	fotmob       *fotmob.Service
-	ipapi        *ipapi.Client
-	location     *ipapi.Location
-	leftList     components.LeagueList
-	rightSidebar components.Sidebar
-	ready        bool
-	err          error
-	matches      []fotmob.LeagueMatch
-	matchLeague  int
+	svc       *services.MatchService
+	width     int
+	height    int
+	ipapi     *ipapi.Client
+	location  *ipapi.Location
+	leftList  components.LeagueList
+	ready     bool
+	err       error
+	leagues   []domain.Competition
+	matches   []domain.Match
+
 	loadingMatch bool
 	matchScroll  int
 	matchIdx     int
 	selDate       time.Time
 	calendar      components.Calendar
 	showCalendar  bool
-	selectedMatch     *fotmob.LeagueMatch
-	matchDetails      *fotmob.MatchDetailsResponse
-	matchEnrich       *enricher.EnrichedMatch
-	loadingDetail     bool
-	detailErr         string
-	detailTab         int
-	detailScrollOff   int
-	espn              *espn.Service
-	loadingESPN       bool
-	espnErr           string
-	pendingESPN       *espn.EnrichData
+
+	selectedMatch   *domain.Match
+	matchDetails    *domain.MatchDetails
+	loadingDetail   bool
+	detailErr       string
+	detailTab       int
+	detailScrollOff int
+	espnStatus      string
 }
 
 func New() Model {
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	return Model{
-		fotmob:       fotmob.NewService(),
-		espn:         espn.NewService(),
-		ipapi:        ipapi.NewClient(),
-		leftList:     components.NewLeagueList(nil),
-		rightSidebar: components.NewSidebar("", []string{}),
-		selDate:      today,
-		calendar:     components.NewCalendar(today),
+		ipapi:    ipapi.NewClient(),
+		leftList: components.NewLeagueList(nil),
+		selDate:  today,
+		calendar: components.NewCalendar(today),
 	}
+}
+
+func (m Model) locale() string {
+	if m.location != nil {
+		return m.location.Locale()
+	}
+	return "es-419"
+}
+
+func (m Model) country() string {
+	if m.location != nil && m.location.CountryCode != "" {
+		return m.location.CountryCode
+	}
+	return "MEX"
+}
+
+func buildService() *services.MatchService {
+	db, err := sqlite.OpenMappingDB("tifo_mappings.db")
+	if err != nil {
+		log.Printf("[tifo] mapping db: %v (proceeding without cache)", err)
+	}
+
+	mr := resolver.NewMatchResolver(db)
+	tr := resolver.NewTeamResolver(db)
+	cr := resolver.NewCompetitionResolver(db)
+
+	oldFotmob := fotmob.NewService()
+	oldESPN := espn.NewService()
+
+	fp := fotmobProvider.NewProvider(oldFotmob, mr, tr, cr)
+	ep := espnProvider.NewProvider(oldESPN)
+
+	return services.NewMatchService(fp, []providers.Provider{ep}, enrich.DefaultMergeConfig())
 }
 
 func (m Model) Init() tea.Cmd {
@@ -120,12 +155,40 @@ func (m Model) Init() tea.Cmd {
 		_ = f
 	}
 	return tea.Batch(
-		fetchLocation(m.ipapi),
-		fetchLeagues(m.fotmob, "es-419", "MEX"),
+		func() tea.Msg { return initSvcMsg{svc: buildService()} },
+		fetchIPLocation(m.ipapi),
 	)
 }
 
-func fetchLocation(c *ipapi.Client) tea.Cmd {
+// Messages
+type initSvcMsg struct {
+	svc *services.MatchService
+	err error
+}
+
+type locationMsg struct {
+	loc *ipapi.Location
+	err error
+}
+
+type leaguesMsg struct {
+	leagues []domain.Competition
+	err     error
+}
+
+type matchesMsg struct {
+	matches  []domain.Match
+	leagueID int
+	err      error
+}
+
+type detailsMsg struct {
+	details *domain.MatchDetails
+	err     error
+}
+
+// Commands
+func fetchIPLocation(c *ipapi.Client) tea.Cmd {
 	return func() tea.Msg {
 		loc, err := c.GetLocation()
 		if err != nil {
@@ -135,75 +198,27 @@ func fetchLocation(c *ipapi.Client) tea.Cmd {
 	}
 }
 
-func fetchLeagues(svc *fotmob.Service, locale, country string) tea.Cmd {
+func fetchLeagues(svc *services.MatchService, locale, country string) tea.Cmd {
 	return func() tea.Msg {
-		leagues, err := svc.GetPopularLeagues(locale, country)
-		if err != nil {
-			return leaguesMsg{err: err}
-		}
-		return leaguesMsg{leagues: leagues}
+		leagues, err := svc.Leagues(nil, locale, country)
+		return leaguesMsg{leagues: leagues, err: err}
 	}
 }
 
-func fetchMatches(svc *fotmob.Service, leagueID int) tea.Cmd {
+func fetchMatches(svc *services.MatchService, fotmobID string) tea.Cmd {
 	return func() tea.Msg {
-		matches, err := svc.LeagueMatches(leagueID)
-		if err != nil {
-			return matchesMsg{err: err}
-		}
-		return matchesMsg{matches: matches, leagueID: leagueID}
+		matches, err := svc.LeagueMatches(nil, fotmobID)
+		return matchesMsg{matches: matches, err: err}
 	}
 }
 
-func fetchESPN(svc *espn.Service, matchID string, leagueName string, utcTime time.Time, homeTeam, awayTeam string) tea.Cmd {
+func fetchMatchDetails(svc *services.MatchService, matchID string, ctx services.MatchContext) tea.Cmd {
 	return func() tea.Msg {
-		log.Printf("[TUI] fetchESPN match=%s league=%q time=%s home=%q away=%q", matchID, leagueName, utcTime.Format(time.RFC3339), homeTeam, awayTeam)
-		fid := 0
-		fmt.Sscanf(matchID, "%d", &fid)
-		data, err := svc.FetchMatch(fid, leagueName, utcTime, homeTeam, awayTeam)
-		if err != nil {
-			log.Printf("[TUI] fetchESPN error: %v", err)
-			return espnMsg{err: err}
-		}
-		log.Printf("[TUI] fetchESPN success: eventID=%s league=%s home=%s away=%s", data.EventID, data.LeagueSlug, data.HomeTeam, data.AwayTeam)
-		return espnMsg{data: data}
+		log.Printf("[TUI] fetchDetails match=%s league=%q time=%v home=%q away=%q",
+			matchID, ctx.LeagueName, ctx.UTCTime, ctx.HomeTeam, ctx.AwayTeam)
+		details, err := svc.MatchDetails(nil, matchID, ctx)
+		return detailsMsg{details: details, err: err}
 	}
-}
-
-func fetchMatchDetails(svc *fotmob.Service, matchID string) tea.Cmd {
-	return func() tea.Msg {
-		details, err := svc.MatchDetailsByID(matchID)
-		if err != nil {
-			return detailsMsg{err: err}
-		}
-		return detailsMsg{details: details}
-	}
-}
-
-type locationMsg struct {
-	loc *ipapi.Location
-	err error
-}
-
-type leaguesMsg struct {
-	leagues []fotmob.GroupedLeague
-	err     error
-}
-
-type matchesMsg struct {
-	matches  []fotmob.LeagueMatch
-	leagueID int
-	err      error
-}
-
-type detailsMsg struct {
-	details *fotmob.MatchDetailsResponse
-	err     error
-}
-
-type espnMsg struct {
-	data *espn.EnrichData
-	err  error
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -212,11 +227,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
+	case initSvcMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.svc = msg.svc
+		if m.location != nil || m.err != nil {
+			return m, fetchLeagues(m.svc, m.locale(), m.country())
+		}
+		return m, nil
+
 	case locationMsg:
 		if msg.err == nil {
 			m.location = msg.loc
-			return m, fetchLeagues(m.fotmob, msg.loc.Locale(), msg.loc.CountryCode)
+		} else {
+			log.Printf("[TUI] location error: %v (using default)", msg.err)
 		}
+		if m.svc != nil {
+			return m, fetchLeagues(m.svc, m.locale(), m.country())
+		}
+		return m, nil
 
 	case leaguesMsg:
 		m.ready = true
@@ -224,17 +255,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		m.leftList.SetLeagues(msg.leagues)
+		m.leagues = msg.leagues
+		items := make([]components.LeagueItem, 0, len(msg.leagues))
+		for _, l := range msg.leagues {
+			items = append(items, components.LeagueItem{
+				TIFOID:       l.TIFOID,
+				Name:         l.Name,
+				OriginalName: l.OriginalName,
+				Country:      l.Country,
+			})
+		}
+		m.leftList.SetLeagues(items)
 		if len(msg.leagues) > 0 {
 			m.loadingMatch = true
-			return m, fetchMatches(m.fotmob, msg.leagues[0].ID)
+			if id, ok := msg.leagues[0].ExternalIDs.Get("fotmob"); ok {
+				return m, fetchMatches(m.svc, id)
+			}
 		}
 
 	case matchesMsg:
 		m.loadingMatch = false
 		if msg.err == nil {
 			m.matches = msg.matches
-			m.matchLeague = msg.leagueID
 			m.matchScroll = 0
 		}
 
@@ -243,554 +285,167 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.detailErr = msg.err.Error()
 			m.matchDetails = nil
-			log.Printf("[TUI] fotmob detail error: %s", m.detailErr)
+			log.Printf("[TUI] detail error: %s", m.detailErr)
 		} else {
 			m.detailErr = ""
 			m.matchDetails = msg.details
-			log.Printf("[TUI] fotmob detail loaded: stats=%d events=%d", len(msg.details.Content.Stats.Periods.All.Stats), len(msg.details.Content.MatchFacts.Events.Events))
-			if m.pendingESPN != nil {
-				m.matchEnrich = enricher.Enrich(msg.details, m.pendingESPN)
-				log.Printf("[TUI] enriched from pending ESPN data")
-				m.pendingESPN = nil
-			}
-		}
-
-	case espnMsg:
-		m.loadingESPN = false
-		if msg.err != nil {
-			m.espnErr = msg.err.Error()
-			log.Printf("[TUI] espn error: %s", m.espnErr)
-		} else {
-			m.espnErr = ""
-			log.Printf("[TUI] espn success, fotmob ready=%v", m.matchDetails != nil)
-			if m.matchDetails != nil {
-				m.matchEnrich = enricher.Enrich(m.matchDetails, msg.data)
-				log.Printf("[TUI] enriched: venue=%q att=%d ref=%q weather=%q colors=%s/%s",
-					m.matchEnrich.Venue, m.matchEnrich.Attendance, m.matchEnrich.Referee,
-					m.matchEnrich.Weather, m.matchEnrich.HomeColor, m.matchEnrich.AwayColor)
-				if m.matchEnrich.ESPNStats != nil {
-					log.Printf("[TUI] ESPN stats: %d mappings applied", len(m.matchEnrich.ESPNStats))
-				}
-				m.loadingDetail = false
-			} else {
-				m.pendingESPN = msg.data
-			}
 		}
 
 	case tea.KeyMsg:
 		if m.showCalendar {
-			switch msg.String() {
-			case "esc":
-				m.showCalendar = false
-			case "enter":
-				m.selDate = m.calendar.Date()
-				m.showCalendar = false
-				m.calendar.SetDate(m.selDate)
-				return m, nil
-			case "up":
-				m.calendar.CursorUp()
-			case "down":
-				m.calendar.CursorDown()
-			case "left":
-				m.calendar.CursorLeft()
-			case "right":
-				m.calendar.CursorRight()
-			}
-			return m, nil
+			return m.updateCalendar(msg)
 		}
-
 		if m.selectedMatch != nil {
-			switch msg.String() {
-			case "esc", "backspace":
-				m.selectedMatch = nil
-				m.matchDetails = nil
-				m.matchEnrich = nil
-			case "left", "h":
-				if m.detailTab > 0 {
-					m.detailTab--
-				} else {
-					m.detailTab = 4
-				}
-			case "right", "l":
-				if m.detailTab < 4 {
-					m.detailTab++
-				} else {
-					m.detailTab = 0
-				}
-			case "u":
-				m.detailScrollOff -= 3
-				if m.detailScrollOff < 0 {
-					m.detailScrollOff = 0
-				}
-			case "d":
-				m.detailScrollOff += 3
-			}
-			return m, nil
+			return m.updateDetail(msg)
 		}
+		return m.updateBrowse(msg)
+	}
 
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Batch(tea.ClearScreen, tea.Quit)
-		case "enter":
-			if matches := m.filteredMatches(); len(matches) > 0 {
-				idx := m.matchIdx
-				if idx < 0 {
-					idx = 0
-				}
-				if idx >= len(matches) {
-					idx = len(matches) - 1
-				}
-				m.selectedMatch = &matches[idx]
-				m.detailTab = 0
-				m.detailScrollOff = 0
-				m.matchDetails = nil
-				m.matchEnrich = nil
-				m.pendingESPN = nil
-				m.espnErr = ""
-				m.detailErr = ""
-				m.loadingDetail = true
-				m.loadingESPN = true
+	return m, nil
+}
 
-				cmds := []tea.Cmd{fetchMatchDetails(m.fotmob, matches[idx].ID)}
-
-				if sel := m.leftList.Selected(); sel != nil {
-					utcTime, err := parseUTCTime(matches[idx].Status.UTCTime)
-					if err == nil {
-						leagueName := sel.OriginalName
-						if leagueName == "" {
-							leagueName = sel.Name
-						}
-						cmds = append(cmds, fetchESPN(m.espn, matches[idx].ID, leagueName, utcTime,
-							matches[idx].Home.Name, matches[idx].Away.Name))
-					}
-				}
-
-				return m, tea.Batch(cmds...)
-			}
-		case "c":
-			m.showCalendar = true
-		case "up", "k":
-			m.leftList.Up()
-			if sel := m.leftList.Selected(); sel != nil && sel.ID != m.matchLeague {
-				m.loadingMatch = true
-				m.matchIdx = 0
-				return m, fetchMatches(m.fotmob, sel.ID)
-			}
-		case "down", "j":
-			m.leftList.Down()
-			if sel := m.leftList.Selected(); sel != nil && sel.ID != m.matchLeague {
-				m.loadingMatch = true
-				m.matchIdx = 0
-				return m, fetchMatches(m.fotmob, sel.ID)
-			}
-		case "n":
-			if matches := m.filteredMatches(); len(matches) > 0 {
-				m.matchIdx++
-				if m.matchIdx >= len(matches) {
-					m.matchIdx = 0
-				}
-			}
-		case "p":
-			if matches := m.filteredMatches(); len(matches) > 0 {
-				m.matchIdx--
-				if m.matchIdx < 0 {
-					m.matchIdx = len(matches) - 1
-				}
-			}
-		case "left", "h":
-			m.selDate = m.selDate.AddDate(0, 0, -1)
-			m.calendar.SetDate(m.selDate)
-			m.matchIdx = 0
-		case "right", "l":
-			m.selDate = m.selDate.AddDate(0, 0, 1)
-			m.calendar.SetDate(m.selDate)
-			m.matchIdx = 0
-		case "d":
-			m.matchScroll += 5
-		case "u":
-			m.matchScroll -= 5
-			if m.matchScroll < 0 {
-				m.matchScroll = 0
-			}
-		}
+func (m Model) updateCalendar(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.showCalendar = false
+	case "enter":
+		m.selDate = m.calendar.Date()
+		m.showCalendar = false
+		m.calendar.SetDate(m.selDate)
+	case "up":
+		m.calendar.CursorUp()
+	case "down":
+		m.calendar.CursorDown()
+	case "left":
+		m.calendar.CursorLeft()
+	case "right":
+		m.calendar.CursorRight()
 	}
 	return m, nil
 }
 
-func formatMatch(m fotmob.LeagueMatch) string {
-	var sb strings.Builder
-
-	home := m.Home.Name
-	away := m.Away.Name
-
-	if m.Status.ScoreStr != "" {
-		sb.WriteString(matchStyle.Render(fmt.Sprintf("%-22s", home)))
-		sb.WriteString(matchScoreStyle.Render(fmt.Sprintf(" %s ", m.Status.ScoreStr)))
-		sb.WriteString(matchStyle.Render(away))
-	} else {
-		timeStr := formatTime(m.Status.UTCTime)
-		sb.WriteString(matchStyle.Render(fmt.Sprintf("%-22s", home)))
-		sb.WriteString(vsStyle.Render(" vs "))
-		sb.WriteString(matchStyle.Render(fmt.Sprintf("%-22s", away)))
-		sb.WriteString(matchTimeStyle.Render(" " + timeStr))
-	}
-
-	return sb.String()
-}
-
-func statusLabel(s fotmob.MatchStatus) string {
-	if s.Finished {
-		return "Finalizado"
-	}
-	if s.Started {
-		return "En vivo"
-	}
-	if s.Cancelled {
-		return "Cancelado"
-	}
-	return "Programado"
-}
-
-func buildDetailData(d *fotmob.MatchDetailsResponse, enrich *enricher.EnrichedMatch, espnLoading bool, espnErr string) *components.MatchDetailData {
-	if d == nil {
-		return nil
-	}
-
-	data := &components.MatchDetailData{}
-
-	// Stats — FotMob primary, ESPN fill for nulls
-	for _, cat := range d.Content.Stats.Periods.All.Stats {
-		sc := components.StatCategory{Title: cat.Title}
-		for _, s := range cat.Stats {
-			homeVal := ""
-			if len(s.Stats) > 0 && s.Stats[0] != nil {
-				homeVal = fmt.Sprintf("%v", s.Stats[0])
-			}
-			awayVal := ""
-			if len(s.Stats) > 1 && s.Stats[1] != nil {
-				awayVal = fmt.Sprintf("%v", s.Stats[1])
-			}
-
-			// Fill from ESPN if FotMob has null
-			if homeVal == "" || awayVal == "" {
-				if enrich != nil && enrich.ESPNStats != nil {
-					if e, ok := enrich.ESPNStats[s.Key]; ok {
-						if homeVal == "" {
-							homeVal = e[0]
-						}
-						if awayVal == "" {
-							awayVal = e[1]
-						}
-					}
-				}
-			}
-
-			sc.Stats = append(sc.Stats, components.StatRow{
-				Label: s.Title,
-				Home:  homeVal,
-				Away:  awayVal,
-			})
-		}
-		data.Stats = append(data.Stats, sc)
-	}
-
-	// Lineup
-	lu := &data.Lineup
-	lu.HomeFormation = d.Content.Lineup.HomeTeam.Formation
-	lu.AwayFormation = d.Content.Lineup.AwayTeam.Formation
-	lu.HomeCoach = d.Content.Lineup.HomeTeam.Coach.Name
-	lu.AwayCoach = d.Content.Lineup.AwayTeam.Coach.Name
-	for _, p := range d.Content.Lineup.HomeTeam.Starters {
-		lu.HomeStarters = append(lu.HomeStarters, components.PlayerLineup{
-			Name:   p.Name,
-			Number: p.ShirtNumber,
-		})
-	}
-	for _, p := range d.Content.Lineup.HomeTeam.Subs {
-		lu.HomeSubs = append(lu.HomeSubs, components.PlayerLineup{
-			Name:   p.Name,
-			Number: p.ShirtNumber,
-		})
-	}
-	for _, p := range d.Content.Lineup.AwayTeam.Starters {
-		lu.AwayStarters = append(lu.AwayStarters, components.PlayerLineup{
-			Name:   p.Name,
-			Number: p.ShirtNumber,
-		})
-	}
-	for _, p := range d.Content.Lineup.AwayTeam.Subs {
-		lu.AwaySubs = append(lu.AwaySubs, components.PlayerLineup{
-			Name:   p.Name,
-			Number: p.ShirtNumber,
-		})
-	}
-
-	// Events - all events from matchFacts + shotmap sorted by time
-	var evItems []components.EventItem
-
-	for _, ev := range d.Content.MatchFacts.Events.Events {
-		team := ""
-		if ev.IsHome {
-			team = d.General.HomeTeam.Name
+func (m Model) updateDetail(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "backspace":
+		m.selectedMatch = nil
+		m.matchDetails = nil
+	case "left", "h":
+		if m.detailTab > 0 {
+			m.detailTab--
 		} else {
-			team = d.General.AwayTeam.Name
+			m.detailTab = 4
 		}
-		player := ""
-		if ev.Player != nil {
-			player = ev.Player.Name
+	case "right", "l":
+		if m.detailTab < 4 {
+			m.detailTab++
+		} else {
+			m.detailTab = 0
 		}
-		minute := fmt.Sprintf("%d", ev.Time)
-		overload := 0
-		if ev.OverloadTime != nil && *ev.OverloadTime > 0 {
-			minute = fmt.Sprintf("%d+%d", ev.Time, *ev.OverloadTime)
-			overload = *ev.OverloadTime
+	case "u":
+		m.detailScrollOff -= 3
+		if m.detailScrollOff < 0 {
+			m.detailScrollOff = 0
 		}
-		detail := ""
-		subOut := ""
-		subIn := ""
-		if len(ev.Swap) >= 2 {
-			subOut = ev.Swap[1].Name
-			subIn = ev.Swap[0].Name
-			detail = fmt.Sprintf("↓ %s · ↑ %s", subOut, subIn)
+	case "d":
+		m.detailScrollOff += 3
+	}
+	return m, nil
+}
+
+func (m Model) updateBrowse(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Batch(tea.ClearScreen, tea.Quit)
+
+	case "enter":
+		matches := m.filteredMatches()
+		if len(matches) == 0 {
+			return m, nil
 		}
-		if ev.InjuredPlayerOut {
-			if detail != "" {
-				detail += " (lesión)"
-			} else {
-				detail = "lesión"
+		idx := m.matchIdx
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(matches) {
+			idx = len(matches) - 1
+		}
+
+		m.selectedMatch = &matches[idx]
+		m.detailTab = 0
+		m.detailScrollOff = 0
+		m.matchDetails = nil
+		m.detailErr = ""
+		m.loadingDetail = true
+
+		// Build match context for enrichment
+		ctx := services.MatchContext{}
+		if sel := m.leftList.Selected(); sel != nil && m.svc != nil {
+			if id, ok := matches[idx].ExternalIDs.Get("fotmob"); ok {
+				ctx.HomeTeam = matches[idx].Home.Name
+				ctx.AwayTeam = matches[idx].Away.Name
+				ctx.UTCTime = matches[idx].Status.Kickoff
+				ctx.LeagueName = sel.OriginalName
+
+				return m, fetchMatchDetails(m.svc, id, ctx)
 			}
 		}
-		addedTime := 0
-		if ev.MinutesAddedInput > 0 {
-			addedTime = ev.MinutesAddedInput
-		}
-		cardType := ev.Card
-		goalDesc := ev.GoalDescription
-		halfStr := ev.HalfStrShort
-		ownGoal := ev.OwnGoal != nil
 
-		evItems = append(evItems, components.EventItem{
-			Minute:     minute,
-			EventType:  ev.Type,
-			Player:     player,
-			Team:       team,
-			HomeScore:  ev.HomeScore,
-			AwayScore:  ev.AwayScore,
-			CardType:   cardType,
-			IsHome:     ev.IsHome,
-			Detail:     detail,
-			SubOut:     subOut,
-			SubIn:      subIn,
-			AddedTime:  addedTime,
-			GoalDesc:   goalDesc,
-			HalfStr:    halfStr,
-			OwnGoal:    ownGoal,
-			SortTime:   ev.Time,
-			SortOverload: overload,
-		})
-	}
+	case "c":
+		m.showCalendar = true
 
-	// Add shotmap events
-	for _, s := range d.Content.Shotmap.Shots {
-		minute := fmt.Sprintf("%d", s.Min)
-		overload := 0
-		if s.MinAdded != nil && *s.MinAdded > 0 {
-			minute = fmt.Sprintf("%d+%d", s.Min, *s.MinAdded)
-			overload = *s.MinAdded
-		}
-		isHome := teamIDMatch(d.General.HomeTeam.ID, s.TeamID)
-		team := d.General.AwayTeam.Name
-		if isHome {
-			team = d.General.HomeTeam.Name
-		}
-		desc := ""
-		switch s.EventType {
-		case "Goal":
-			desc = "gol"
-		case "AttemptSaved":
-			desc = "atajado"
-		case "Miss":
-			desc = "falló"
-		default:
-			desc = s.EventType
-		}
-		evItems = append(evItems, components.EventItem{
-			Minute:       minute,
-			EventType:    "Shot",
-			Player:       s.PlayerName,
-			Team:         team,
-			IsHome:       isHome,
-			ShotDesc:     desc,
-			SortTime:     s.Min,
-			SortOverload: overload,
-		})
-	}
-
-	// Inject ESPN extra events
-	if enrich != nil {
-		for _, ee := range enrich.ExtraEvents {
-			evItems = append(evItems, components.EventItem{
-				Minute:       fmt.Sprintf("%d", ee.Minute),
-				EventType:    ee.EventType,
-				Detail:       ee.Description,
-				Team:         ee.TeamSide,
-				SortTime:     ee.Minute,
-				SortOverload: ee.AddedTime,
-			})
-		}
-	}
-
-	// Fix Half/FT events to account for added time (match ends at 90+X, not 90)
-	for i, ev := range evItems {
-		if ev.EventType == "Half" && (ev.HalfStr == "FT" || ev.HalfStr == "HT") && ev.SortOverload == 0 {
-			for _, at := range evItems {
-				if at.EventType == "AddedTime" && at.SortTime == ev.SortTime && at.AddedTime > 0 {
-					evItems[i].SortOverload = at.AddedTime
-					evItems[i].Minute = fmt.Sprintf("%d+%d", ev.SortTime, at.AddedTime)
-					break
-				}
+	case "up", "k":
+		m.leftList.Up()
+		sel := m.leftList.Selected()
+		if sel != nil && len(m.leagues) > m.leftList.Cursor() {
+			if id, ok := m.leagues[m.leftList.Cursor()].ExternalIDs.Get("fotmob"); ok {
+				m.loadingMatch = true
+				return m, fetchMatches(m.svc, id)
 			}
 		}
-	}
 
-	sort.Slice(evItems, func(i, j int) bool {
-		ti := evItems[i].SortTime
-		tj := evItems[j].SortTime
-		if ti == tj {
-			return evItems[i].SortOverload < evItems[j].SortOverload
+	case "down", "j":
+		m.leftList.Down()
+		sel := m.leftList.Selected()
+		if sel != nil && len(m.leagues) > m.leftList.Cursor() {
+			if id, ok := m.leagues[m.leftList.Cursor()].ExternalIDs.Get("fotmob"); ok {
+				m.loadingMatch = true
+				return m, fetchMatches(m.svc, id)
+			}
 		}
-		return ti < tj
-	})
-	data.Events.Items = evItems
 
-	// H2H
-	if len(d.Content.H2H.Summary) >= 3 {
-		data.H2H = components.H2HData{
-			HomeWins: d.Content.H2H.Summary[0],
-			Draws:    d.Content.H2H.Summary[1],
-			AwayWins: d.Content.H2H.Summary[2],
+	case "n":
+		if m.matchIdx < len(m.matches)-1 {
+			m.matchIdx++
 		}
-	}
-
-	// Injuries
-	for _, p := range d.Content.Lineup.HomeTeam.Unavailable {
-		data.Injuries.Home = append(data.Injuries.Home, components.InjuryPlayer{
-			Name:   p.Name,
-			Type:   p.Unavailability.Type,
-			Return: p.Unavailability.ExpectedReturn,
-		})
-	}
-	for _, p := range d.Content.Lineup.AwayTeam.Unavailable {
-		data.Injuries.Away = append(data.Injuries.Away, components.InjuryPlayer{
-			Name:   p.Name,
-			Type:   p.Unavailability.Type,
-			Return: p.Unavailability.ExpectedReturn,
-		})
-	}
-
-	// Team colors: FotMob primary, ESPN fallback
-	extraInfo := &components.MatchExtraInfo{}
-	extraInfo.HomeColor = d.General.TeamColors.LightMode.Home
-	extraInfo.AwayColor = d.General.TeamColors.LightMode.Away
-	if extraInfo.HomeColor == "" {
-		extraInfo.HomeColor = d.General.TeamColors.DarkMode.Home
-	}
-	if extraInfo.AwayColor == "" {
-		extraInfo.AwayColor = d.General.TeamColors.DarkMode.Away
-	}
-
-	if espnLoading {
-		extraInfo.ESPNStatus = "ESPN: cargando..."
-	}
-	if espnErr != "" {
-		extraInfo.ESPNStatus = fmt.Sprintf("ESPN: %s", espnErr)
-	}
-	if enrich != nil {
-		extraInfo.Venue = enrich.Venue
-		extraInfo.Attendance = enrich.Attendance
-		extraInfo.Referee = enrich.Referee
-		extraInfo.Weather = enrich.Weather
-		extraInfo.Broadcasts = enrich.Broadcasts
-		if extraInfo.HomeColor == "" {
-			extraInfo.HomeColor = enrich.HomeColor
+	case "p":
+		if m.matchIdx > 0 {
+			m.matchIdx--
 		}
-		if extraInfo.AwayColor == "" {
-			extraInfo.AwayColor = enrich.AwayColor
-		}
-		extraInfo.HomeAltColor = enrich.HomeAltColor
-		extraInfo.AwayAltColor = enrich.AwayAltColor
-		extraInfo.ESPNStatus = ""
+	case "left":
+		m.selDate = m.selDate.AddDate(0, 0, -1)
+		m.calendar.SetDate(m.selDate)
+	case "right":
+		m.selDate = m.selDate.AddDate(0, 0, 1)
+		m.calendar.SetDate(m.selDate)
 	}
-	data.Events.ExtraInfo = extraInfo
 
-	return data
+	return m, nil
 }
 
-func teamIDMatch(id interface{}, teamID int) bool {
-	switch v := id.(type) {
-	case int:
-		return v == teamID
-	case float64:
-		return int(v) == teamID
-	case string:
-		var n int
-		_, err := fmt.Sscanf(v, "%d", &n)
-		return err == nil && n == teamID
-	}
-	return false
-}
-
-func formatTime(utcTime string) string {
-	// try to parse known time layouts and convert to local time
-	if t, err := parseUTCTime(utcTime); err == nil {
-		local := t.In(time.Local)
-		return local.Format("01-02 15:04")
-	}
-
-	if len(utcTime) >= 16 {
-		return utcTime[5:10] + " " + utcTime[11:16]
-	}
-	return utcTime
-}
-
-func matchDate(m fotmob.LeagueMatch) string {
-	if t, err := parseUTCTime(m.Status.UTCTime); err == nil {
-		return t.In(time.Local).Format("2006-01-02")
-	}
-	if len(m.Status.UTCTime) >= 10 {
-		return m.Status.UTCTime[:10]
-	}
-	return ""
-}
-
-func filterMatches(matches []fotmob.LeagueMatch, date time.Time) []fotmob.LeagueMatch {
-	dateStr := date.Format("2006-01-02")
-	var out []fotmob.LeagueMatch
-	for _, m := range matches {
-		if matchDate(m) == dateStr {
-			out = append(out, m)
+func (m Model) filteredMatches() []domain.Match {
+	dateStr := m.selDate.Format("2006-01-02")
+	var out []domain.Match
+	for _, match := range m.matches {
+		if t := match.Status.Kickoff; !t.IsZero() {
+			// Convert UTC kickoff to local time before comparing dates
+			if t.In(time.Local).Format("2006-01-02") == dateStr {
+				out = append(out, match)
+			}
+		} else if strings.HasPrefix(match.Status.UTCTime, dateStr) {
+			out = append(out, match)
 		}
 	}
 	return out
-}
-
-func (m Model) filteredMatches() []fotmob.LeagueMatch {
-	return filterMatches(m.matches, m.selDate)
-}
-
-func parseUTCTime(utc string) (time.Time, error) {
-	// try common layouts (RFC3339 is preferred)
-	layouts := []string{
-		time.RFC3339,
-		"2006-01-02 15:04:05",
-		"2006-01-02T15:04:05",
-	}
-	for _, l := range layouts {
-		if t, err := time.Parse(l, utc); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("unrecognized time format")
 }
 
 func (m Model) View() string {
@@ -828,16 +483,14 @@ func (m Model) View() string {
 	dateStr := m.selDate.Format("Mon 2006-01-02")
 	today := time.Now()
 	isToday := m.selDate.Year() == today.Year() && m.selDate.YearDay() == today.YearDay()
-
 	dateNav := fmt.Sprintf("  < %s >", dateStr)
 	if isToday {
 		dateNav = fmt.Sprintf("  < %s • Today >", dateStr)
-	} else {
-		dateNav = fmt.Sprintf("  < %s >", dateStr)
 	}
+
 	dateView := dateNavStyle.Render(dateNav)
 
-	filtered := filterMatches(m.matches, m.selDate)
+	filtered := m.filteredMatches()
 
 	var centerBody string
 	if m.loadingMatch {
@@ -901,7 +554,7 @@ func (m Model) View() string {
 	var rightLines []string
 	if m.location != nil {
 		rightLines = append(rightLines,
-			emptyStyle.Render(fmt.Sprintf("📍 %s", m.location.CountryName)),
+			emptyStyle.Render(fmt.Sprintf("%s", m.location.CountryName)),
 			emptyStyle.Render(fmt.Sprintf("   %s", m.location.City)),
 		)
 	}
@@ -928,33 +581,230 @@ func (m Model) View() string {
 		)
 		mainView = lipgloss.JoinVertical(lipgloss.Top, mainRow, footer)
 	} else if m.selectedMatch != nil {
-		md := components.NewMatchDetail(
-			m.selectedMatch.Home.Name,
-			m.selectedMatch.Away.Name,
-			m.selectedMatch.Status.ScoreStr,
-			statusLabel(m.selectedMatch.Status),
-			formatTime(m.selectedMatch.Status.UTCTime),
-			m.selectedMatch.ID,
-		)
-		md.Tabs = components.NewTabs([]string{"Alineaciones", "Eventos", "Estadísticas", "H2H", "Lesiones"})
-		for i := 0; i < m.detailTab; i++ {
-			md.Tabs.Right()
-		}
-		md.ScrollOff = m.detailScrollOff
-
-		if m.matchDetails != nil {
-			md.Details = buildDetailData(m.matchDetails, m.matchEnrich, m.loadingESPN, m.espnErr)
-		} else if m.loadingDetail {
-			md.Details = nil
-		} else if m.detailErr != "" {
-			md.SetError(m.detailErr)
-		} else {
-			// still loading fotmob details
-		}
-
+		md := m.buildDetailView()
 		detailView := md.Render(m.width, m.height-2)
+		m.detailScrollOff = md.ScrollOff
 		mainView = lipgloss.JoinVertical(lipgloss.Top, detailView, footer)
 	}
 
 	return mainView
+}
+
+func (m Model) buildDetailView() *components.MatchDetail {
+	match := m.selectedMatch
+
+	md := components.NewMatchDetail(
+		match.Home.Name,
+		match.Away.Name,
+		match.Status.ScoreStr,
+		statusLabel(match.Status),
+		formatTime(match.Status),
+		"",
+	)
+
+	md.Tabs = components.NewTabs([]string{"Alineaciones", "Eventos", "Estadísticas", "H2H", "Lesiones"})
+	for i := 0; i < m.detailTab; i++ {
+		md.Tabs.Right()
+	}
+	md.ScrollOff = m.detailScrollOff
+
+	if m.matchDetails != nil {
+		d := m.matchDetails
+		md.Details = buildFromDomain(d, m.espnStatus)
+	} else if m.loadingDetail {
+		md.Details = nil
+	} else if m.detailErr != "" {
+		md.SetError(m.detailErr)
+	}
+
+	return &md
+}
+
+func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.MatchDetailData {
+	data := &components.MatchDetailData{}
+
+	// Stats
+	for _, cat := range d.Statistics {
+		sc := components.StatCategory{Title: cat.Title}
+		for _, s := range cat.Stats {
+			sc.Stats = append(sc.Stats, components.StatRow{
+				Label: s.Label,
+				Home:  s.Home,
+				Away:  s.Away,
+			})
+		}
+		data.Stats = append(data.Stats, sc)
+	}
+
+	// Lineups
+	if d.Lineups != nil {
+		data.Lineup = components.LineupData{
+			HomeFormation: d.Lineups.HomeFormation,
+			AwayFormation: d.Lineups.AwayFormation,
+			HomeCoach:     d.Lineups.HomeCoach,
+			AwayCoach:     d.Lineups.AwayCoach,
+		}
+		for _, p := range d.Lineups.HomeStarters {
+			data.Lineup.HomeStarters = append(data.Lineup.HomeStarters, components.PlayerLineup{
+				Name: p.Name, Number: p.Number,
+			})
+		}
+		for _, p := range d.Lineups.HomeSubs {
+			data.Lineup.HomeSubs = append(data.Lineup.HomeSubs, components.PlayerLineup{
+				Name: p.Name, Number: p.Number,
+			})
+		}
+		for _, p := range d.Lineups.AwayStarters {
+			data.Lineup.AwayStarters = append(data.Lineup.AwayStarters, components.PlayerLineup{
+				Name: p.Name, Number: p.Number,
+			})
+		}
+		for _, p := range d.Lineups.AwaySubs {
+			data.Lineup.AwaySubs = append(data.Lineup.AwaySubs, components.PlayerLineup{
+				Name: p.Name, Number: p.Number,
+			})
+		}
+	}
+
+	// Events
+	for _, ev := range d.Events {
+		player := ""
+		if ev.Player != nil {
+			player = ev.Player.Name
+		}
+		detail := ev.Detail
+		subOut, subIn := "", ""
+		if ev.SubOut != nil {
+			subOut = ev.SubOut.Name
+		}
+		if ev.SubIn != nil {
+			subIn = ev.SubIn.Name
+		}
+		team := d.Match.Away
+		if ev.Team == domain.SideHome {
+			team = d.Match.Home
+		}
+
+		minute := fmt.Sprintf("%d", ev.Minute)
+		if ev.SortOverload > 0 {
+			minute = fmt.Sprintf("%d+%d", ev.Minute, ev.SortOverload)
+		}
+
+		data.Events.Items = append(data.Events.Items, components.EventItem{
+			Minute:       minute,
+			EventType:    string(ev.EventType),
+			Player:       player,
+			Team:         team,
+			HomeScore:    ev.HomeScore,
+			AwayScore:    ev.AwayScore,
+			CardType:     ev.CardType,
+			IsHome:       ev.Team == domain.SideHome,
+			Detail:       detail,
+			SubOut:       subOut,
+			SubIn:        subIn,
+			AddedTime:    ev.AddedTime,
+			GoalDesc:     ev.GoalDesc,
+			HalfStr:      ev.HalfStr,
+			OwnGoal:      ev.OwnGoal,
+			ShotDesc:     ev.ShotDesc,
+			SortTime:     ev.SortTime,
+			SortOverload: ev.SortOverload,
+		})
+	}
+
+	// Sort events
+	sort.Slice(data.Events.Items, func(i, j int) bool {
+		ti, tj := data.Events.Items[i].SortTime, data.Events.Items[j].SortTime
+		if ti == tj {
+			return data.Events.Items[i].SortOverload < data.Events.Items[j].SortOverload
+		}
+		return ti < tj
+	})
+
+	// H2H
+	if d.H2H != nil {
+		data.H2H = components.H2HData{
+			HomeWins: d.H2H.HomeWins,
+			Draws:    d.H2H.Draws,
+			AwayWins: d.H2H.AwayWins,
+		}
+	}
+
+	// Injuries
+	for _, inj := range d.Injuries {
+		item := components.InjuryPlayer{
+			Name: inj.Player.Name, Type: inj.Type, Return: inj.Return,
+		}
+		if inj.Team == domain.SideHome {
+			data.Injuries.Home = append(data.Injuries.Home, item)
+		} else {
+			data.Injuries.Away = append(data.Injuries.Away, item)
+		}
+	}
+
+	// Extra info
+	data.Events.ExtraInfo = &components.MatchExtraInfo{
+		Venue:       d.ExtraInfo.Venue,
+		Attendance:  d.ExtraInfo.Attendance,
+		Referee:     d.ExtraInfo.Referee,
+		Weather:     d.ExtraInfo.Weather,
+		Broadcasts:  d.ExtraInfo.Broadcasts,
+		HomeColor:   d.ExtraInfo.HomeColor,
+		AwayColor:   d.ExtraInfo.AwayColor,
+		ESPNStatus:  espnStatus,
+	}
+
+	return data
+}
+
+func formatMatch(m domain.Match) string {
+	ko := m.Status.Kickoff
+	timeStr := "--:--"
+	if !ko.IsZero() {
+		timeStr = ko.In(time.Local).Format("15:04")
+	}
+
+	home := m.Home.Name
+	away := m.Away.Name
+
+	if m.HomeScore != nil && m.AwayScore != nil {
+		return fmt.Sprintf("%s %s  %s vs %s",
+			matchTimeStyle.Render(timeStr),
+			matchScoreStyle.Render(fmt.Sprintf("%d-%d", *m.HomeScore, *m.AwayScore)),
+			matchStyle.Render(home),
+			matchStyle.Render(away))
+	}
+
+	return fmt.Sprintf("%s  %s vs %s",
+		matchTimeStyle.Render(timeStr),
+		matchStyle.Render(home),
+		matchStyle.Render(away))
+}
+
+func statusLabel(s domain.MatchStatus) string {
+	switch s.State {
+	case domain.MatchScheduled:
+		return "Programado"
+	case domain.MatchLive:
+		if s.Detail != "" {
+			return s.Detail
+		}
+		return "En vivo"
+	case domain.MatchFinished:
+		return "Finalizado"
+	case domain.MatchPostponed:
+		return "Postergado"
+	default:
+		return string(s.State)
+	}
+}
+
+func formatTime(s domain.MatchStatus) string {
+	if t := s.Kickoff; !t.IsZero() {
+		return t.In(time.Local).Format("01-02 15:04")
+	}
+	if len(s.UTCTime) >= 16 {
+		return s.UTCTime[5:10] + " " + s.UTCTime[11:16]
+	}
+	return s.UTCTime
 }

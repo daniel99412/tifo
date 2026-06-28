@@ -1,19 +1,26 @@
 package components
 
 import (
-	"tifo/fotmob"
+	"tifo/internal/domain"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
+type LeagueItem struct {
+	TIFOID       domain.TIFOID
+	Name         string
+	OriginalName string
+	Country      string
+}
+
 type LeagueList struct {
-	leagues     []fotmob.GroupedLeague
+	leagues     []LeagueItem
 	cursor      int
 	itemStyle   lipgloss.Style
 	cursorStyle lipgloss.Style
 }
 
-func NewLeagueList(leagues []fotmob.GroupedLeague) LeagueList {
+func NewLeagueList(leagues []LeagueItem) LeagueList {
 	return LeagueList{
 		leagues: leagues,
 		itemStyle: lipgloss.NewStyle().
@@ -26,7 +33,7 @@ func NewLeagueList(leagues []fotmob.GroupedLeague) LeagueList {
 	}
 }
 
-func (l *LeagueList) SetLeagues(leagues []fotmob.GroupedLeague) {
+func (l *LeagueList) SetLeagues(leagues []LeagueItem) {
 	l.leagues = leagues
 	if l.cursor >= len(leagues) {
 		l.cursor = 0
@@ -37,7 +44,7 @@ func (l *LeagueList) Cursor() int {
 	return l.cursor
 }
 
-func (l *LeagueList) Selected() *fotmob.GroupedLeague {
+func (l *LeagueList) Selected() *LeagueItem {
 	if len(l.leagues) == 0 {
 		return nil
 	}
