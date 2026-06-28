@@ -196,6 +196,8 @@ type LineupPlayer struct {
 	Name        string `json:"name"`
 	ShirtNumber string `json:"shirtNumber"`
 	PositionID  int    `json:"positionId"`
+	Position    string `json:"position,omitempty"`
+	Role        string `json:"role,omitempty"`
 }
 
 type H2HData struct {

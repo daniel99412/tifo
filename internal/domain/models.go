@@ -55,9 +55,11 @@ type Player struct {
 
 // PlayerRef is a lightweight reference.
 type PlayerRef struct {
-	TIFOID TIFOID
-	Name   string
-	Number string
+	TIFOID  TIFOID
+	Name    string
+	Number  string
+	PosID   int
+	PosName string
 }
 
 // MatchStatus describes the current state of a match.

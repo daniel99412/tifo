@@ -189,16 +189,24 @@ func (p *Provider) mapLineups(d *oldFotmob.MatchDetailsResponse) *domain.Lineups
 		AwayCoach:     d.Content.Lineup.AwayTeam.Coach.Name,
 	}
 	for _, p := range d.Content.Lineup.HomeTeam.Starters {
-		lu.HomeStarters = append(lu.HomeStarters, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber})
+		posName := p.Position
+		if posName == "" { posName = p.Role }
+		lu.HomeStarters = append(lu.HomeStarters, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName})
 	}
 	for _, p := range d.Content.Lineup.HomeTeam.Subs {
-		lu.HomeSubs = append(lu.HomeSubs, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber})
+		posName := p.Position
+		if posName == "" { posName = p.Role }
+		lu.HomeSubs = append(lu.HomeSubs, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName})
 	}
 	for _, p := range d.Content.Lineup.AwayTeam.Starters {
-		lu.AwayStarters = append(lu.AwayStarters, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber})
+		posName := p.Position
+		if posName == "" { posName = p.Role }
+		lu.AwayStarters = append(lu.AwayStarters, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName})
 	}
 	for _, p := range d.Content.Lineup.AwayTeam.Subs {
-		lu.AwaySubs = append(lu.AwaySubs, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber})
+		posName := p.Position
+		if posName == "" { posName = p.Role }
+		lu.AwaySubs = append(lu.AwaySubs, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName})
 	}
 	return lu
 }

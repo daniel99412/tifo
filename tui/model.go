@@ -620,6 +620,53 @@ func (m Model) buildDetailView() *components.MatchDetail {
 	return &md
 }
 
+func posAbbr(posID int, posName string) string {
+	if posName != "" {
+		switch posName {
+		// English
+		case "Goalkeeper", "GK", "G": return "POR"
+		case "Sweeper", "SW": return "DFC"
+		case "Centre-Back", "Centre Back", "Center-Back", "Center Back", "CB": return "DFC"
+		case "Left-Back", "Left Back", "LB": return "LI"
+		case "Right-Back", "Right Back", "RB": return "LD"
+		case "Wing-Back", "Wingback", "WB": return "LI"
+		case "Left Wing-Back", "Left Wingback", "LWB": return "LI"
+		case "Right Wing-Back", "Right Wingback", "RWB": return "LD"
+		case "Defensive Midfield", "Defensive Midfielder", "CDM", "DM": return "MCD"
+		case "Central Midfield", "Central Midfielder", "CM": return "MC"
+		case "Attacking Midfield", "Attacking Midfielder", "CAM", "AM": return "MCO"
+		case "Left Midfield", "Left Midfielder", "LM": return "MI"
+		case "Right Midfield", "Right Midfielder", "RM": return "MD"
+		case "Left Winger", "LW": return "EI"
+		case "Right Winger", "RW": return "ED"
+		case "Centre-Forward", "Centre Forward", "Center-Forward", "Center Forward", "CF": return "DC"
+		case "Striker", "ST": return "DC"
+		case "Second Striker", "Secondstriker", "SS": return "SD"
+		// Spanish
+		case "Portero", "Arquero": return "POR"
+		case "Defensa Central", "Central": return "DFC"
+		case "Lateral Izquierdo", "Lateral Izq": return "LI"
+		case "Lateral Derecho", "Lateral Der": return "LD"
+		case "Mediocentro Defensivo", "Pivote", "Volante Defensivo": return "MCD"
+		case "Mediocentro", "Volante Central": return "MC"
+		case "Mediocentro Ofensivo", "Volante Ofensivo", "Enganche": return "MCO"
+		case "Interior Izquierdo": return "MI"
+		case "Interior Derecho": return "MD"
+		case "Extremo Izquierdo", "Extremo Izq", "Ala Izquierdo": return "EI"
+		case "Extremo Derecho", "Extremo Der", "Ala Derecho": return "ED"
+		case "Delantero Centro", "Centrodelantero": return "DC"
+		case "Segundo Delantero": return "SD"
+		}
+	}
+	switch posID {
+	case 0, 1: return "POR"
+	case 2: return "DFC"
+	case 3: return "MC"
+	case 4: return "DC"
+	default: return ""
+	}
+}
+
 func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.MatchDetailData {
 	data := &components.MatchDetailData{}
 
@@ -644,26 +691,21 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 			HomeCoach:     d.Lineups.HomeCoach,
 			AwayCoach:     d.Lineups.AwayCoach,
 		}
-		for _, p := range d.Lineups.HomeStarters {
-			data.Lineup.HomeStarters = append(data.Lineup.HomeStarters, components.PlayerLineup{
-				Name: p.Name, Number: p.Number,
-			})
+		mapPlayer := func(p domain.PlayerRef) components.PlayerLineup {
+			return components.PlayerLineup{Name: p.Name, Number: p.Number, PosName: posAbbr(p.PosID, p.PosName)}
 		}
-		for _, p := range d.Lineups.HomeSubs {
-			data.Lineup.HomeSubs = append(data.Lineup.HomeSubs, components.PlayerLineup{
-				Name: p.Name, Number: p.Number,
-			})
+		sortByPos := func(ps []domain.PlayerRef) []components.PlayerLineup {
+			sorted := make([]domain.PlayerRef, len(ps))
+			copy(sorted, ps)
+			sort.Slice(sorted, func(i, j int) bool { return sorted[i].PosID < sorted[j].PosID })
+			out := make([]components.PlayerLineup, len(sorted))
+			for i, p := range sorted { out[i] = mapPlayer(p) }
+			return out
 		}
-		for _, p := range d.Lineups.AwayStarters {
-			data.Lineup.AwayStarters = append(data.Lineup.AwayStarters, components.PlayerLineup{
-				Name: p.Name, Number: p.Number,
-			})
-		}
-		for _, p := range d.Lineups.AwaySubs {
-			data.Lineup.AwaySubs = append(data.Lineup.AwaySubs, components.PlayerLineup{
-				Name: p.Name, Number: p.Number,
-			})
-		}
+		data.Lineup.HomeStarters = sortByPos(d.Lineups.HomeStarters)
+		data.Lineup.HomeSubs = sortByPos(d.Lineups.HomeSubs)
+		data.Lineup.AwayStarters = sortByPos(d.Lineups.AwayStarters)
+		data.Lineup.AwaySubs = sortByPos(d.Lineups.AwaySubs)
 	}
 
 	// Events

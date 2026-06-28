@@ -148,8 +148,9 @@ type LineupData struct {
 }
 
 type PlayerLineup struct {
-	Name   string
-	Number string
+	Name    string
+	Number  string
+	PosName string
 }
 
 type EventData struct {
@@ -541,13 +542,23 @@ func (md MatchDetail) teamColumn(formation, coach string, starters, subs []Playe
 		Foreground(lipgloss.Color("240")).Render(fmt.Sprintf("DT: %s", coach)))
 	lines = append(lines, "")
 
+	posW := 3
+	for _, p := range starters {
+		if len(p.PosName) > posW { posW = len(p.PosName) }
+	}
+	for _, p := range subs {
+		if len(p.PosName) > posW { posW = len(p.PosName) }
+	}
+	nameW := colW - 8 - posW
+	if nameW < 3 { nameW = 3 }
+
 	lines = append(lines, lipgloss.NewStyle().Width(colW).Bold(true).
 		Foreground(lipgloss.Color("255")).Render("Titulares"))
 	lines = append(lines, "")
 
 	for _, p := range starters {
 		line := lipgloss.NewStyle().Width(colW).
-			Foreground(lipgloss.Color("255")).Render(fmt.Sprintf("  %2s  %s", p.Number, p.Name))
+			Foreground(lipgloss.Color("255")).Render(fmt.Sprintf("  %2s  %-*s  %-*s", p.Number, nameW, p.Name, posW, p.PosName))
 		lines = append(lines, line)
 	}
 
@@ -563,7 +574,7 @@ func (md MatchDetail) teamColumn(formation, coach string, starters, subs []Playe
 
 	for _, p := range subs {
 		line := lipgloss.NewStyle().Width(colW).
-			Foreground(lipgloss.Color("240")).Render(fmt.Sprintf("  %2s  %s", p.Number, p.Name))
+			Foreground(lipgloss.Color("240")).Render(fmt.Sprintf("  %2s  %-*s  %-*s", p.Number, nameW, p.Name, posW, p.PosName))
 		lines = append(lines, line)
 	}
 
