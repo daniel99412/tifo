@@ -358,14 +358,37 @@ func (p *Provider) mapStats(d *oldFotmob.MatchDetailsResponse) []domain.StatCate
 }
 
 func (p *Provider) mapH2H(d *oldFotmob.MatchDetailsResponse) *domain.H2H {
-	if len(d.Content.H2H.Summary) >= 3 {
-		return &domain.H2H{
-			HomeWins: d.Content.H2H.Summary[0],
-			Draws:    d.Content.H2H.Summary[1],
-			AwayWins: d.Content.H2H.Summary[2],
-		}
+	if len(d.Content.H2H.Summary) < 3 {
+		return nil
 	}
-	return nil
+	out := &domain.H2H{
+		HomeWins: d.Content.H2H.Summary[0],
+		Draws:    d.Content.H2H.Summary[1],
+		AwayWins: d.Content.H2H.Summary[2],
+	}
+	for _, m := range d.Content.H2H.Matches {
+		hs, as := 0, 0
+		if m.Status.ScoreStr != "" {
+			parts := strings.Split(m.Status.ScoreStr, "-")
+			if len(parts) == 2 {
+				hs, _ = strconv.Atoi(strings.TrimSpace(parts[0]))
+				as, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+			}
+		}
+		comp := m.League.Name
+		if comp == "Friendlies" {
+			comp = "FRIENDLY"
+		}
+		out.Matches = append(out.Matches, domain.H2HMatchDetail{
+			Date:        parseUTCTime(m.Status.UTCTime),
+			HomeTeam:    m.Home.Name,
+			AwayTeam:    m.Away.Name,
+			HomeScore:   hs,
+			AwayScore:   as,
+			Competition: comp,
+		})
+	}
+	return out
 }
 
 func (p *Provider) mapInjuries(d *oldFotmob.MatchDetailsResponse) []domain.InjuryItem {

@@ -220,6 +220,11 @@ type H2HMatch struct {
 	Home   Team        `json:"home"`
 	Away   Team        `json:"away"`
 	Status MatchStatus `json:"status"`
+	League struct {
+		Name    string `json:"name"`
+		ID      string `json:"id"`
+		PageURL string `json:"pageUrl"`
+	} `json:"league"`
 }
 
 type PlayerStat struct {

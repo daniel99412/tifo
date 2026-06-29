@@ -22,7 +22,7 @@ func NewLookupService(client *Client, cache *IDCache) *LookupService {
 	return &LookupService{client: client, cache: cache}
 }
 
-func parseESPNDate(s string) (time.Time, error) {
+func ParseESPNDate(s string) (time.Time, error) {
 	layouts := []string{
 		"2006-01-02T15:04:05Z",
 		"2006-01-02T15:04:05Z07:00",

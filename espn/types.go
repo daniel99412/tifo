@@ -45,15 +45,16 @@ type ScoreboardBroadcast struct {
 }
 
 type SummaryResponse struct {
-	Header    SummaryHeader   `json:"header"`
-	GameInfo  GameInfo        `json:"gameInfo"`
-	KeyEvents []KeyEvent      `json:"keyEvents"`
-	Commentary []CommentaryItem `json:"commentary"`
-	Format    Format          `json:"format"`
-	Boxscore  Boxscore        `json:"boxscore"`
-	Broadcasts []SummaryBroadcast `json:"broadcasts"`
-	Odds      []Odds          `json:"odds"`
-	Rosters   []SummaryRoster `json:"rosters"`
+	Header         SummaryHeader    `json:"header"`
+	GameInfo       GameInfo         `json:"gameInfo"`
+	KeyEvents      []KeyEvent       `json:"keyEvents"`
+	Commentary     []CommentaryItem `json:"commentary"`
+	Format         Format           `json:"format"`
+	Boxscore       Boxscore         `json:"boxscore"`
+	Broadcasts     []SummaryBroadcast `json:"broadcasts"`
+	Odds           []Odds           `json:"odds"`
+	Rosters        []SummaryRoster  `json:"rosters"`
+	HeadToHeadGames []HeadToHeadTeamEvents `json:"headToHeadGames,omitempty"`
 }
 
 type SummaryHeader struct {
@@ -336,4 +337,34 @@ type SummaryPosition struct {
 	Name         string `json:"name"`
 	DisplayName  string `json:"displayName"`
 	Abbreviation string `json:"abbreviation"`
+}
+
+type HeadToHeadTeamEvents struct {
+	Team   HeadToHeadTeam   `json:"team"`
+	Events []HeadToHeadGame `json:"events"`
+}
+
+type HeadToHeadTeam struct {
+	ID           string `json:"id"`
+	DisplayName  string `json:"displayName"`
+	Abbreviation string `json:"abbreviation"`
+}
+
+type HeadToHeadGame struct {
+	ID               string `json:"id"`
+	Score            string `json:"score"`
+	GameDate         string `json:"gameDate"`
+	HomeTeamID       string `json:"homeTeamId"`
+	AwayTeamID       string `json:"awayTeamId"`
+	HomeTeamScore    string `json:"homeTeamScore"`
+	AwayTeamScore    string `json:"awayTeamScore"`
+	GameResult       string `json:"gameResult"`
+	CompetitionName  string `json:"competitionName"`
+	LeagueName       string `json:"leagueName"`
+	AtVs             string `json:"atVs"`
+	Opponent         struct {
+		ID           string `json:"id"`
+		DisplayName  string `json:"displayName"`
+		Abbreviation string `json:"abbreviation"`
+	} `json:"opponent"`
 }

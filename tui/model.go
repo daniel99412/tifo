@@ -850,11 +850,42 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 
 	// H2H
 	if d.H2H != nil {
-		data.H2H = components.H2HData{
-			HomeWins: d.H2H.HomeWins,
-			Draws:    d.H2H.Draws,
-			AwayWins: d.H2H.AwayWins,
+		h2h := components.H2HData{
+			HomeWins:   d.H2H.HomeWins,
+			Draws:      d.H2H.Draws,
+			AwayWins:   d.H2H.AwayWins,
+			HomeRecord: d.H2H.HomeRecord,
+			AwayRecord: d.H2H.AwayRecord,
 		}
+		for _, fe := range d.H2H.HomeForm {
+			h2h.HomeForm = append(h2h.HomeForm, components.H2HFormEvent{
+				Opponent: fe.Opponent,
+				Score:    fe.Score,
+				Result:   fe.Result,
+			})
+		}
+		for _, fe := range d.H2H.AwayForm {
+			h2h.AwayForm = append(h2h.AwayForm, components.H2HFormEvent{
+				Opponent: fe.Opponent,
+				Score:    fe.Score,
+				Result:   fe.Result,
+			})
+		}
+		for _, m := range d.H2H.Matches {
+			date := ""
+			if !m.Date.IsZero() {
+				date = m.Date.In(time.Local).Format("02-01-2006")
+			}
+			score := fmt.Sprintf("%d : %d", m.HomeScore, m.AwayScore)
+			h2h.Matches = append(h2h.Matches, components.H2HMatchItem{
+				Date:        date,
+				HomeTeam:    m.HomeTeam,
+				AwayTeam:    m.AwayTeam,
+				Score:       score,
+				Competition: m.Competition,
+			})
+		}
+		data.H2H = h2h
 	}
 
 	// Injuries

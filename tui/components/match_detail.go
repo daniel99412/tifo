@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -205,6 +206,25 @@ type H2HData struct {
 	HomeWins  int
 	Draws     int
 	AwayWins  int
+	Matches   []H2HMatchItem
+	HomeForm  []H2HFormEvent
+	AwayForm  []H2HFormEvent
+	HomeRecord string
+	AwayRecord string
+}
+
+type H2HMatchItem struct {
+	Date        string
+	HomeTeam    string
+	AwayTeam    string
+	Score       string
+	Competition string
+}
+
+type H2HFormEvent struct {
+	Opponent string
+	Score    string
+	Result   string // W/D/L
 }
 
 type InjuriesData struct {
@@ -530,8 +550,8 @@ func (md *MatchDetail) renderLineup(width, height int) string {
 
 	var rendered []string
 	for i := 0; i < maxLen; i++ {
-		h := ""
-		a := ""
+		h := lipgloss.NewStyle().Width(homeW).Render("")
+		a := lipgloss.NewStyle().Width(awayW).Render("")
 		if i < len(homeLines) {
 			h = homeLines[i]
 		}
@@ -893,10 +913,120 @@ func (md *MatchDetail) renderH2H(width, height int) string {
 	h2h := md.Details.H2H
 	var lines []string
 
-	lines = append(lines, mdSectionHeader.Render("Enfrentamientos directos"))
-	summary := fmt.Sprintf("  %s: %d  ·  Empates: %d  ·  %s: %d",
-		md.HomeName, h2h.HomeWins, h2h.Draws, md.AwayName, h2h.AwayWins)
-	lines = append(lines, mdPlayerStyle.Render(summary))
+	// Header
+	headerW := width
+	if headerW < 30 {
+		headerW = 30
+	}
+	green := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render
+	drawLabel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")).Render
+	colW := (headerW - 12) / 2
+	if colW < 8 {
+		colW = 8
+	}
+	homeLabel := lipgloss.NewStyle().Width(colW).Align(lipgloss.Right).Bold(true).Foreground(lipgloss.Color("255")).Render(md.HomeName)
+	awayLabel := lipgloss.NewStyle().Width(colW).Align(lipgloss.Left).Bold(true).Foreground(lipgloss.Color("255")).Render(md.AwayName)
+	lines = append(lines, fmt.Sprintf("  %s    %s    %s",
+		homeLabel, drawLabel("EMPATES"), awayLabel))
+	homeVal := lipgloss.NewStyle().Width(colW).Align(lipgloss.Right).Render(fmt.Sprintf("%d", h2h.HomeWins))
+	drawVal := lipgloss.NewStyle().Width(8).Align(lipgloss.Center).Render(fmt.Sprintf("%d", h2h.Draws))
+	awayVal := lipgloss.NewStyle().Width(colW).Align(lipgloss.Left).Render(fmt.Sprintf("%d", h2h.AwayWins))
+	lines = append(lines, fmt.Sprintf("  %s    %s    %s", green(homeVal), drawVal, awayVal))
+	lines = append(lines, "")
+
+	// Historical matches
+	if len(h2h.Matches) > 0 {
+		lines = append(lines, mdSectionHeader.Render("ENFRENTAMIENTOS DIRECTOS"))
+		scoreCol := 7
+		dateW := 12
+		teamW := (width - dateW - scoreCol - 4) / 2
+		if teamW < 6 {
+			teamW = 6
+		}
+		winnerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render
+		loserStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render
+		drawStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render
+		for _, m := range h2h.Matches {
+			score := m.Score
+			parts := strings.SplitN(m.Score, " : ", 2)
+			if len(parts) == 2 {
+				hs, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+				as, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+				if hs > as {
+					score = winnerStyle(m.Score)
+				} else if as > hs {
+					score = loserStyle(m.Score)
+				} else {
+					score = drawStyle(m.Score)
+				}
+			}
+			hTeam := fmt.Sprintf("%-*s", teamW, m.HomeTeam)
+			aTeam := fmt.Sprintf("%-*s", teamW, m.AwayTeam)
+			matchLine := fmt.Sprintf("  %s  %s  %s  %s  %s",
+				m.Date, hTeam, score, aTeam, m.Competition)
+			lines = append(lines, mdPlayerStyle.Render(matchLine))
+		}
+		lines = append(lines, "")
+	}
+
+	// Recent form
+	if len(h2h.HomeForm) > 0 || len(h2h.AwayForm) > 0 {
+		lines = append(lines, mdSectionHeader.Render("ULTIMOS PARTIDOS"))
+		formW := width - 4
+		halfW := (formW - 3) / 2
+		if halfW < 15 {
+			halfW = 15
+		}
+		homeHdr := lipgloss.NewStyle().Width(halfW).Bold(true).Foreground(lipgloss.Color("255")).Render(md.HomeName)
+		awayHdr := lipgloss.NewStyle().Width(halfW).Bold(true).Foreground(lipgloss.Color("255")).Align(lipgloss.Right).Render(md.AwayName)
+		lines = append(lines, fmt.Sprintf("  %s   %s", homeHdr, awayHdr))
+		sep := strings.Repeat("─", width-2)
+		lines = append(lines, fmt.Sprintf("  %s", sep))
+
+		maxRows := len(h2h.HomeForm)
+		if len(h2h.AwayForm) > maxRows {
+			maxRows = len(h2h.AwayForm)
+		}
+		resGreen := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render
+		resYellow := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")).Render
+		resRed := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")).Render
+
+		for i := 0; i < maxRows; i++ {
+			left := ""
+			if i < len(h2h.HomeForm) {
+				fe := h2h.HomeForm[i]
+				res := fe.Result
+				switch res {
+				case "W":
+					res = resGreen("W")
+				case "D":
+					res = resYellow("D")
+				case "L":
+					res = resRed("L")
+				}
+				left = fmt.Sprintf("%-*s", halfW, fmt.Sprintf("%s  %s  %s", fe.Opponent, fe.Score, res))
+			} else {
+				left = strings.Repeat(" ", halfW)
+			}
+			right := ""
+			if i < len(h2h.AwayForm) {
+				fe := h2h.AwayForm[i]
+				res := fe.Result
+				switch res {
+				case "W":
+					res = resGreen("W")
+				case "D":
+					res = resYellow("D")
+				case "L":
+					res = resRed("L")
+				}
+				right = fmt.Sprintf("%*s", halfW, fmt.Sprintf("%s  %s  %s", fe.Opponent, fe.Score, res))
+			} else {
+				right = strings.Repeat(" ", halfW)
+			}
+			lines = append(lines, fmt.Sprintf("  %s   %s", left, right))
+		}
+	}
 
 	body := lipgloss.JoinVertical(lipgloss.Top, lines...)
 	return md.applyScroll(body, width, height)

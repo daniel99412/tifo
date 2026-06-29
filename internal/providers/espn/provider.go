@@ -3,6 +3,7 @@ package espn
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"tifo/internal/domain"
@@ -44,9 +45,36 @@ func normalizePlayerName(name string) string {
 		"ä", "a", "ë", "e", "ö", "o", "ï", "i",
 		"â", "a", "ê", "e", "ô", "o", "î", "i", "û", "u",
 		"ã", "a", "õ", "o",
-		".", "", "-", " ", "'", "",
+		".", "", "-", "", "'", "",
 	)
 	return strings.TrimSpace(repl.Replace(lower))
+}
+
+func levenshtein(a, b string) int {
+	la, lb := len(a), len(b)
+	if la == 0 {
+		return lb
+	}
+	if lb == 0 {
+		return la
+	}
+	prev := make([]int, lb+1)
+	curr := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= la; i++ {
+		curr[0] = i
+		for j := 1; j <= lb; j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			curr[j] = min(curr[j-1]+1, min(prev[j]+1, prev[j-1]+cost))
+		}
+		prev, curr = curr, prev
+	}
+	return prev[lb]
 }
 
 func namesMatch(a, b string) bool {
@@ -61,6 +89,17 @@ func namesMatch(a, b string) bool {
 	}
 	if len(shorter) < 2 {
 		return false
+	}
+	if len(shorter) == len(longer) {
+		for i := range shorter {
+			dist := levenshtein(shorter[i], longer[i])
+			if dist > 2 {
+				log.Printf("[ESPN] namesMatch lev fail: %q vs %q → dist=%d > 2", shorter[i], longer[i], dist)
+				return false
+			}
+		}
+		log.Printf("[ESPN] namesMatch lev ok: a=%q b=%q", a, b)
+		return true
 	}
 	longerSet := make(map[string]bool, len(longer))
 	for _, t := range longer {
@@ -77,21 +116,37 @@ func namesMatch(a, b string) bool {
 func enrichPlayersFromRoster(players []domain.PlayerRef, rosterNamePos map[string]string) {
 	for i := range players {
 		key := normalizePlayerName(players[i].Name)
+		matched := false
 		if posName, ok := rosterNamePos[key]; ok && posName != "" {
 			players[i].PosName = posName
+			log.Printf("[ESPN] player %q exact match → %s (key=%q)", players[i].Name, posName, key)
 			continue
 		}
 		for espnKey, posName := range rosterNamePos {
 			if posName != "" && namesMatch(key, espnKey) {
 				players[i].PosName = posName
+				log.Printf("[ESPN] player %q fuzzy match → %s (fotmobKey=%q, espnKey=%q)", players[i].Name, posName, key, espnKey)
+				matched = true
 				break
 			}
+		}
+		if !matched {
+			log.Printf("[ESPN] player %q NO match in roster (normalized=%q, roster=%v)", players[i].Name, key, mapKeys(rosterNamePos))
 		}
 	}
 }
 
+func mapKeys(m map[string]string) []string {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func (p *Provider) enrichPositions(fotmobDetails *domain.MatchDetails, rosters []oldESPN.SummaryRoster) {
 	if fotmobDetails.Lineups == nil || len(rosters) == 0 {
+		log.Printf("[ESPN] enrichPositions: no lineups or rosters")
 		return
 	}
 
@@ -104,6 +159,7 @@ func (p *Provider) enrichPositions(fotmobDetails *domain.MatchDetails, rosters [
 		}
 
 		isHome := r.HomeAway == "home"
+		log.Printf("[ESPN] enrichPositions side=%s roster=%v", r.HomeAway, rosterPos)
 		if isHome {
 			enrichPlayersFromRoster(fotmobDetails.Lineups.HomeStarters, rosterPos)
 			enrichPlayersFromRoster(fotmobDetails.Lineups.HomeSubs, rosterPos)
@@ -188,6 +244,97 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 	out.Statistics = p.mapStats(data, fotmobDetails.Statistics)
 
 	p.enrichPositions(&out, data.Summary.Rosters)
+
+	// H2H enrichment: form + record
+	if out.H2H == nil {
+		out.H2H = &domain.H2H{}
+	}
+	for _, comp := range data.Summary.Header.Competitions {
+		for _, c := range comp.Competitors {
+			rec := ""
+			for _, r := range c.Record {
+				if r.Type == "total" {
+					rec = r.Summary
+					break
+				}
+			}
+			if c.HomeAway == "home" {
+				out.H2H.HomeRecord = rec
+			} else {
+				out.H2H.AwayRecord = rec
+			}
+		}
+	}
+	if data.Summary.Boxscore.Form != nil {
+		entries, ok := data.Summary.Boxscore.Form.([]interface{})
+		if ok {
+			for _, entry := range entries {
+				em, ok := entry.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				teamRaw, _ := em["team"].(map[string]interface{})
+				teamName, _ := teamRaw["displayName"].(string)
+				if teamName == "" {
+					continue
+				}
+				var formEvents []domain.H2HFormEvent
+				eventsRaw, _ := em["events"].([]interface{})
+				for _, evRaw := range eventsRaw {
+					ev, _ := evRaw.(map[string]interface{})
+					res, _ := ev["gameResult"].(string)
+					score, _ := ev["score"].(string)
+					oppRaw, _ := ev["opponent"].(map[string]interface{})
+					oppName, _ := oppRaw["displayName"].(string)
+					if res != "" {
+						formEvents = append(formEvents, domain.H2HFormEvent{
+							Opponent: oppName,
+							Score:    score,
+							Result:   res,
+						})
+					}
+				}
+				if len(formEvents) > 0 {
+					if teamName == homeTeam || strings.Contains(homeTeam, teamName) || strings.Contains(teamName, homeTeam) {
+						out.H2H.HomeForm = formEvents
+					} else if teamName == awayTeam || strings.Contains(awayTeam, teamName) || strings.Contains(teamName, awayTeam) {
+						out.H2H.AwayForm = formEvents
+					}
+				}
+			}
+		}
+	}
+	// H2H historical matches from ESPN headToHeadGames
+	uniq := make(map[string]bool)
+	for _, teamEntry := range data.Summary.HeadToHeadGames {
+		for _, ev := range teamEntry.Events {
+			if uniq[ev.ID] {
+				continue
+			}
+			uniq[ev.ID] = true
+			var date time.Time
+			if t, err := time.Parse("2006-01-02T15:04Z", ev.GameDate); err == nil {
+				date = t
+			} else if t, err := time.Parse(time.RFC3339, ev.GameDate); err == nil {
+				date = t
+			}
+			hs, _ := strconv.Atoi(ev.HomeTeamScore)
+			as, _ := strconv.Atoi(ev.AwayTeamScore)
+			homeName := teamEntry.Team.DisplayName
+			awayName := ev.Opponent.DisplayName
+			if ev.AtVs == "@" {
+				homeName, awayName = awayName, homeName
+			}
+			out.H2H.Matches = append(out.H2H.Matches, domain.H2HMatchDetail{
+				Date:        date,
+				HomeTeam:    homeName,
+				AwayTeam:    awayName,
+				HomeScore:   hs,
+				AwayScore:   as,
+				Competition: ev.CompetitionName,
+			})
+		}
+	}
 
 	return &out
 }

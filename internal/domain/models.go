@@ -224,10 +224,32 @@ type StatRow struct {
 }
 
 // H2H contains head-to-head aggregate data.
+type H2HMatchDetail struct {
+	Date        time.Time
+	HomeTeam    string
+	AwayTeam    string
+	HomeScore   int
+	AwayScore   int
+	Competition string
+}
+
+type H2HFormEvent struct {
+	Opponent string
+	Score    string
+	Result   string // W/D/L
+}
+
 type H2H struct {
 	HomeWins int
 	Draws    int
 	AwayWins int
+	Matches  []H2HMatchDetail
+
+	// ESPN enrichment
+	HomeForm   []H2HFormEvent
+	AwayForm   []H2HFormEvent
+	HomeRecord string
+	AwayRecord string
 }
 
 // InjuryItem describes an unavailable player.
