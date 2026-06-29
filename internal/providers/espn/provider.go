@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"tifo/internal/domain"
 	"tifo/internal/resolver"
 	oldESPN "tifo/espn"
 	"time"
 )
 
-// Provider implements providers.Provider and providers.EnrichmentProvider.
 type Provider struct {
 	svc *oldESPN.Service
 	mr  *resolver.MatchResolver
@@ -36,7 +36,84 @@ func (p *Provider) MatchDetails(_ context.Context, _ string) (*domain.MatchDetai
 	return nil, fmt.Errorf("espn: MatchDetails not supported")
 }
 
-// EnrichMatch enriches FotMob match details with ESPN data.
+func normalizePlayerName(name string) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	repl := strings.NewReplacer(
+		"á", "a", "é", "e", "í", "i", "ó", "o", "ú", "u",
+		"ü", "u", "ñ", "n", "ç", "c",
+		"ä", "a", "ë", "e", "ö", "o", "ï", "i",
+		"â", "a", "ê", "e", "ô", "o", "î", "i", "û", "u",
+		"ã", "a", "õ", "o",
+		".", "", "-", " ", "'", "",
+	)
+	return strings.TrimSpace(repl.Replace(lower))
+}
+
+func namesMatch(a, b string) bool {
+	if a == b {
+		return true
+	}
+	aTokens := strings.Fields(a)
+	bTokens := strings.Fields(b)
+	shorter, longer := aTokens, bTokens
+	if len(shorter) > len(longer) {
+		shorter, longer = longer, shorter
+	}
+	if len(shorter) < 2 {
+		return false
+	}
+	longerSet := make(map[string]bool, len(longer))
+	for _, t := range longer {
+		longerSet[t] = true
+	}
+	for _, t := range shorter {
+		if !longerSet[t] {
+			return false
+		}
+	}
+	return true
+}
+
+func enrichPlayersFromRoster(players []domain.PlayerRef, rosterNamePos map[string]string) {
+	for i := range players {
+		key := normalizePlayerName(players[i].Name)
+		if posName, ok := rosterNamePos[key]; ok && posName != "" {
+			players[i].PosName = posName
+			continue
+		}
+		for espnKey, posName := range rosterNamePos {
+			if posName != "" && namesMatch(key, espnKey) {
+				players[i].PosName = posName
+				break
+			}
+		}
+	}
+}
+
+func (p *Provider) enrichPositions(fotmobDetails *domain.MatchDetails, rosters []oldESPN.SummaryRoster) {
+	if fotmobDetails.Lineups == nil || len(rosters) == 0 {
+		return
+	}
+
+	for _, r := range rosters {
+		rosterPos := make(map[string]string)
+		for _, player := range r.Roster {
+			key := normalizePlayerName(player.Athlete.DisplayName)
+			posName := player.Position.Abbreviation
+			rosterPos[key] = posName
+		}
+
+		isHome := r.HomeAway == "home"
+		if isHome {
+			enrichPlayersFromRoster(fotmobDetails.Lineups.HomeStarters, rosterPos)
+			enrichPlayersFromRoster(fotmobDetails.Lineups.HomeSubs, rosterPos)
+		} else {
+			enrichPlayersFromRoster(fotmobDetails.Lineups.AwayStarters, rosterPos)
+			enrichPlayersFromRoster(fotmobDetails.Lineups.AwaySubs, rosterPos)
+		}
+	}
+}
+
 func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time, homeTeam, awayTeam string, fotmobDetails *domain.MatchDetails) *domain.MatchDetails {
 	if fotmobDetails == nil {
 		return nil
@@ -49,7 +126,6 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 
 	out := *fotmobDetails
 
-	// Venue
 	if data.Summary.GameInfo.Venue.FullName != "" {
 		out.ExtraInfo.Venue = data.Summary.GameInfo.Venue.FullName
 		city := data.Summary.GameInfo.Venue.Address.City
@@ -61,10 +137,8 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 		}
 	}
 
-	// Attendance
 	out.ExtraInfo.Attendance = data.Summary.GameInfo.Attendance
 
-	// Referee
 	for _, off := range data.Summary.GameInfo.Officials {
 		if off.Position.ID == "1" {
 			out.ExtraInfo.Referee = off.DisplayName
@@ -72,7 +146,6 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 		}
 	}
 
-	// Weather
 	if data.Summary.GameInfo.Weather.DisplayValue != "" {
 		out.ExtraInfo.Weather = data.Summary.GameInfo.Weather.DisplayValue
 	} else if data.Summary.GameInfo.Weather.Condition != "" {
@@ -87,14 +160,12 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 		out.ExtraInfo.Weather = w
 	}
 
-	// Broadcasts
 	for _, b := range data.Summary.Broadcasts {
 		if b.Media != nil && b.Media.Name != "" {
 			out.ExtraInfo.Broadcasts = append(out.ExtraInfo.Broadcasts, b.Media.Name)
 		}
 	}
 
-	// Team colors (fallback)
 	for _, comp := range data.Summary.Header.Competitions {
 		for _, c := range comp.Competitors {
 			if c.HomeAway == "home" {
@@ -109,14 +180,14 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 		}
 	}
 
-	// Extra events (kickoff, halftime, etc.)
 	if fotmobDetails.Events == nil {
 		fotmobDetails.Events = []domain.MatchEvent{}
 	}
 	out.Events = p.mapExtraEvents(data, fotmobDetails.Events, homeTeam, awayTeam)
 
-	// Stats fill
 	out.Statistics = p.mapStats(data, fotmobDetails.Statistics)
+
+	p.enrichPositions(&out, data.Summary.Rosters)
 
 	return &out
 }
@@ -135,7 +206,6 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 		}
 		minute, added := parseClock(ke.Clock.DisplayValue)
 
-		// Skip if already exists from FotMob
 		key := fmt.Sprintf("%d:%d:%s", minute, added, string(typ))
 		if hash[key] {
 			continue
@@ -151,7 +221,6 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 			desc = typeLabel(typ)
 		}
 		if teamSide != "" && !stringsContains(desc, teamSide) {
-			// Add team name to description
 			desc = teamSide + " — " + desc
 		}
 
@@ -174,7 +243,6 @@ func (p *Provider) mapStats(data *oldESPN.EnrichData, existing []domain.StatCate
 		return existing
 	}
 
-	// Build ESPN stat map: key → [home, away]
 	espnByName := make(map[string][2]string)
 	homeStats := data.Summary.Boxscore.Teams[0].Statistics
 	awayStats := data.Summary.Boxscore.Teams[1].Statistics
@@ -187,7 +255,6 @@ func (p *Provider) mapStats(data *oldESPN.EnrichData, existing []domain.StatCate
 		espnByName[hs.Name] = [2]string{hVal, aVal}
 	}
 
-	// Map ESPN names → FotMob keys
 	espnFotmobKey := map[string]string{
 		"possessionPct":     "Ball possession",
 		"totalShots":        "Total shots",
@@ -223,7 +290,6 @@ func (p *Provider) mapStats(data *oldESPN.EnrichData, existing []domain.StatCate
 		if !ok {
 			continue
 		}
-		// Find and fill matching stat category/row
 		for ci, cat := range existing {
 			for si, s := range cat.Stats {
 				if s.Key == fotmobKey {

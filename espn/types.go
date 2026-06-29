@@ -1,5 +1,7 @@
 package espn
 
+import "encoding/json"
+
 type ScoreboardResponse struct {
 	Events []ScoreboardEvent `json:"events"`
 }
@@ -51,6 +53,7 @@ type SummaryResponse struct {
 	Boxscore  Boxscore        `json:"boxscore"`
 	Broadcasts []SummaryBroadcast `json:"broadcasts"`
 	Odds      []Odds          `json:"odds"`
+	Rosters   []SummaryRoster `json:"rosters"`
 }
 
 type SummaryHeader struct {
@@ -238,4 +241,99 @@ type StatusType struct {
 	Completed   bool   `json:"completed"`
 	Description string `json:"description"`
 	Detail      string `json:"detail"`
+}
+
+type PositionsResponse struct {
+	Count    int              `json:"count"`
+	PageIndex int             `json:"pageIndex"`
+	PageSize  int             `json:"pageSize"`
+	PageCount int             `json:"pageCount"`
+	Items    []PositionRef    `json:"items"`
+}
+
+type PositionRef struct {
+	Ref string `json:"$ref"`
+}
+
+type ESPNPosition struct {
+	Ref          string          `json:"$ref,omitempty"`
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	DisplayName  string          `json:"displayName"`
+	Abbreviation string          `json:"abbreviation"`
+	Leaf         bool            `json:"leaf"`
+	Parent       *PositionParent `json:"parent,omitempty"`
+}
+
+type PositionParent struct {
+	Ref string `json:"$ref"`
+}
+
+type RosterResponse struct {
+	Team     RosterTeam     `json:"team"`
+	Athletes []RosterGroup  `json:"athletes"`
+}
+
+type RosterTeam struct {
+	ID           string `json:"id"`
+	Abbreviation string `json:"abbreviation"`
+	DisplayName  string `json:"displayName"`
+}
+
+type RosterGroup struct {
+	Position string         `json:"position"`
+	Items    []RosterPlayer `json:"items"`
+}
+
+type RosterPlayer struct {
+	ID          string         `json:"id"`
+	DisplayName string         `json:"displayName"`
+	FirstName   string         `json:"firstName"`
+	LastName    string         `json:"lastName"`
+	Jersey      string         `json:"jersey"`
+	Position    RosterPosition `json:"position"`
+}
+
+type RosterPosition struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Abbreviation string `json:"abbreviation"`
+
+	DisplayName string `json:"displayName"`
+}
+
+type SummaryRoster struct {
+	HomeAway  string                `json:"homeAway"`
+	Winner    bool                  `json:"winner"`
+	Team      SummaryRosterTeam     `json:"team"`
+	Roster    []SummaryRosterPlayer `json:"roster"`
+	Uniform   json.RawMessage       `json:"uniform"`
+	Formation string                `json:"formation"`
+}
+
+type SummaryRosterTeam struct {
+	ID           string `json:"id"`
+	DisplayName  string `json:"displayName"`
+	Abbreviation string `json:"abbreviation"`
+}
+
+type SummaryRosterPlayer struct {
+	Active      bool                 `json:"active"`
+	Starter     bool                 `json:"starter"`
+	Jersey      string               `json:"jersey"`
+	Athlete     SummaryAthlete       `json:"athlete"`
+	Position    SummaryPosition      `json:"position"`
+	FormationPlace string             `json:"formationPlace"`
+}
+
+type SummaryAthlete struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	FullName    string `json:"fullName"`
+}
+
+type SummaryPosition struct {
+	Name         string `json:"name"`
+	DisplayName  string `json:"displayName"`
+	Abbreviation string `json:"abbreviation"`
 }

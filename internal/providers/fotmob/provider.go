@@ -111,6 +111,10 @@ func (p *Provider) mapMatch(m oldFotmob.LeagueMatch) (*domain.Match, error) {
 	homeScore := parseIntPtr(m.Status.ScoreStr, true)
 	awayScore := parseIntPtr(m.Status.ScoreStr, false)
 
+	log.Printf("[fotmob] mapMatch %q vs %q: started=%v finished=%v scoreStr=%q homeScore=%v awayScore=%v",
+		m.Home.Name, m.Away.Name, m.Status.Started, m.Status.Finished,
+		m.Status.ScoreStr, homeScore, awayScore)
+
 	return &domain.Match{
 		TIFOID:      tifoID,
 		ExternalIDs: domain.ExternalIDs{{Provider: "fotmob", ID: m.ID}},
@@ -155,6 +159,10 @@ func (p *Provider) mapMatchDetails(d *oldFotmob.MatchDetailsResponse) (*domain.M
 			HomeColor: d.General.TeamColors.LightMode.Home,
 			AwayColor: d.General.TeamColors.LightMode.Away,
 		},
+	}
+
+	if len(d.Header.Teams) >= 2 {
+		md.Match.Score = fmt.Sprintf("%d-%d", d.Header.Teams[0].Score, d.Header.Teams[1].Score)
 	}
 
 	// Lineups
@@ -214,6 +222,19 @@ func (p *Provider) mapLineups(d *oldFotmob.MatchDetailsResponse) *domain.Lineups
 func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEvent {
 	var events []domain.MatchEvent
 
+	// Find max added time per half to place HT/FT after all stoppage-time events
+	maxAddedHT, maxAddedFT := 0, 0
+	for _, ev := range d.Content.MatchFacts.Events.Events {
+		if ev.OverloadTime != nil && *ev.OverloadTime > 0 {
+			if ev.Time == 45 && *ev.OverloadTime > maxAddedHT {
+				maxAddedHT = *ev.OverloadTime
+			}
+			if ev.Time == 90 && *ev.OverloadTime > maxAddedFT {
+				maxAddedFT = *ev.OverloadTime
+			}
+		}
+	}
+
 	for _, ev := range d.Content.MatchFacts.Events.Events {
 		player := playerRef(ev.Player)
 		minute := ev.Time
@@ -221,9 +242,16 @@ func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEv
 		if ev.OverloadTime != nil && *ev.OverloadTime > 0 {
 			overload = *ev.OverloadTime
 		}
-		// Sort Half/FT/HT events after all added-time events at same minute
-		if ev.Type == "Half" && (ev.HalfStrShort == "FT" || ev.HalfStrShort == "HT") {
-			overload = 999
+		if ev.Type == "Half" {
+			if ev.HalfStrShort == "HT" {
+				overload = maxAddedHT + 1
+			} else if ev.HalfStrShort == "FT" {
+				overload = maxAddedFT + 1
+			}
+		}
+		eventType := domain.EventType(ev.Type)
+		if ev.Type == "Half" && ev.HalfStrShort == "FT" {
+			eventType = domain.EvFT
 		}
 		team := domain.SideHome
 		if !ev.IsHome {
@@ -244,7 +272,7 @@ func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEv
 		events = append(events, domain.MatchEvent{
 			Minute:       minute,
 			AddedTime:    addedTime,
-			EventType:    domain.EventType(ev.Type),
+			EventType:    eventType,
 			Team:         team,
 			Player:       player,
 			HomeScore:    ev.HomeScore,

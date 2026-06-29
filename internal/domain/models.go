@@ -193,6 +193,7 @@ const (
 	EvS2           EventType = "S2"
 	EvPausa        EventType = "Pausa"
 	EvContinua     EventType = "Continúa"
+	EvFT           EventType = "FT"
 )
 
 // TeamSide distinguishes home/away/neutral.

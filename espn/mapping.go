@@ -95,22 +95,7 @@ func FuzzyTeamMatch(a, b string) bool {
 }
 
 func FindEventByMatch(events []ScoreboardEvent, utcTime time.Time, homeTeam, awayTeam string) *ScoreboardEvent {
-	tolerance := 30 * time.Minute
-
 	for _, ev := range events {
-		evTime, err := parseESPNDate(ev.Date)
-		if err != nil {
-			continue
-		}
-
-		diff := evTime.Sub(utcTime)
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff > tolerance {
-			continue
-		}
-
 		for _, comp := range ev.Competitions {
 			var home, away string
 			for _, c := range comp.Competitors {

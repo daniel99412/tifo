@@ -100,6 +100,12 @@ var (
 	mdTypeStyle = lipgloss.NewStyle().
 			Width(5).
 			Foreground(lipgloss.Color("240"))
+
+	mdLiveIndicatorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("196"))
+
+	mdLiveMinuteStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("215"))
 )
 
 type MatchDetail struct {
@@ -111,9 +117,12 @@ type MatchDetail struct {
 	MatchID     string
 	HomeScore   string
 	AwayScore   string
+	Minute      string
+	WaterBreak  bool
 	Tabs        Tabs
 	Details     *MatchDetailData
 	ScrollOff   int
+	MaxScroll   int
 	Error       string
 }
 
@@ -302,11 +311,21 @@ func (md *MatchDetail) Render(width, height int) string {
 	)
 	lines = append(lines, matchup)
 
-	statusLabel := md.Status
-	if statusLabel == "" {
-		statusLabel = "programado"
+	if md.Minute != "" {
+		minuteStr := md.Minute
+		if md.WaterBreak {
+			minuteStr += " H2O"
+		}
+		lines = append(lines, fmt.Sprintf("  %s %s",
+			mdLiveIndicatorStyle.Render("●"),
+			mdLiveMinuteStyle.Render(minuteStr)))
+	} else {
+		statusLabel := md.Status
+		if statusLabel == "" {
+			statusLabel = "programado"
+		}
+		lines = append(lines, mdInfoStyle.Render(statusLabel))
 	}
-	lines = append(lines, mdInfoStyle.Render(statusLabel))
 	lines = append(lines, mdInfoStyle.Render(md.DateTime))
 
 	// Extra info (venue, attendance, referee, TV)
@@ -649,6 +668,8 @@ func (md MatchDetail) eventTypeCell(ev EventItem) string {
 			str = "FT"
 		}
 		return mdTypeStyle.Render(str)
+	case "FT":
+		return mdTypeStyle.Render("FT")
 	case "AddedTime":
 		return mdTypeStyle.Render("AT")
 	case "PenaltyAwarded":
@@ -771,6 +792,9 @@ func (md MatchDetail) eventDesc(ev EventItem) string {
 		} else {
 			parts = append(parts, "Descanso")
 		}
+
+	case "FT":
+		parts = append(parts, "Final del partido")
 
 	case "AddedTime":
 		if ev.AddedTime > 0 {
@@ -954,6 +978,7 @@ func (md *MatchDetail) applyScroll(body string, width, height int) string {
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
+	md.MaxScroll = maxScroll
 	if md.ScrollOff > maxScroll {
 		md.ScrollOff = maxScroll
 	}

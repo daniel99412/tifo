@@ -9,6 +9,7 @@ import (
 
 const (
 	siteBaseURL = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+	coreBaseURL = "https://sports.core.api.espn.com/v2/sports/soccer/leagues"
 )
 
 type Client struct {
@@ -57,8 +58,34 @@ func (c *Client) Scoreboard(leagueSlug, date string) (*ScoreboardResponse, error
 }
 
 func (c *Client) Summary(leagueSlug, eventID string) (*SummaryResponse, error) {
-	url := fmt.Sprintf("%s/%s/summary?event=%s&lang=es", siteBaseURL, leagueSlug, eventID)
+	url := fmt.Sprintf("%s/%s/summary?event=%s", siteBaseURL, leagueSlug, eventID)
 	var resp SummaryResponse
+	if err := c.get(url, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) Positions(leagueSlug string) (*PositionsResponse, error) {
+	url := fmt.Sprintf("%s/%s/positions?limit=100", coreBaseURL, leagueSlug)
+	var resp PositionsResponse
+	if err := c.get(url, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) PositionDetail(refURL string) (*ESPNPosition, error) {
+	var pos ESPNPosition
+	if err := c.get(refURL, &pos); err != nil {
+		return nil, err
+	}
+	return &pos, nil
+}
+
+func (c *Client) TeamRoster(leagueSlug, teamID string) (*RosterResponse, error) {
+	url := fmt.Sprintf("%s/%s/teams/%s/roster", siteBaseURL, leagueSlug, teamID)
+	var resp RosterResponse
 	if err := c.get(url, &resp); err != nil {
 		return nil, err
 	}

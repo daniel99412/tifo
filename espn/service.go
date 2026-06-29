@@ -45,3 +45,25 @@ func (s *Service) FetchMatch(fotmobID int, leagueName string, utcTime time.Time,
 		Summary:    summary,
 	}, nil
 }
+
+func (s *Service) GetPositions(leagueSlug string) ([]ESPNPosition, error) {
+	resp, err := s.client.Positions(leagueSlug)
+	if err != nil {
+		return nil, err
+	}
+
+	var positions []ESPNPosition
+	for _, ref := range resp.Items {
+		pos, err := s.client.PositionDetail(ref.Ref)
+		if err != nil {
+			continue
+		}
+		positions = append(positions, *pos)
+	}
+
+	return positions, nil
+}
+
+func (s *Service) GetTeamRoster(leagueSlug, teamID string) (*RosterResponse, error) {
+	return s.client.TeamRoster(leagueSlug, teamID)
+}

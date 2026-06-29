@@ -192,5 +192,9 @@ func (e *Enricher) Merge(primary, enrichment *domain.MatchDetails) *domain.Match
 }
 
 func eventKey(ev domain.MatchEvent) string {
-	return fmt.Sprintf("%d:%d:%s:%s", ev.Minute, ev.AddedTime, ev.EventType, ev.Player)
+	player := ""
+	if ev.Player != nil {
+		player = ev.Player.Name
+	}
+	return fmt.Sprintf("%d:%d:%s:%s", ev.Minute, ev.AddedTime, ev.EventType, player)
 }
