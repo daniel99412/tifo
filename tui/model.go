@@ -1069,13 +1069,30 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 			minute = fmt.Sprintf("%d+%d", ev.Minute, ev.SortOverload)
 		}
 
+		// fotmob envía marcador previo al evento, ajustamos para goles
+		hs, as := ev.HomeScore, ev.AwayScore
+		switch ev.EventType {
+		case domain.EvGoal:
+			if ev.Team == domain.SideHome {
+				hs++
+			} else {
+				as++
+			}
+		case domain.EvOwnGoal:
+			if ev.Team == domain.SideHome {
+				as++
+			} else {
+				hs++
+			}
+		}
+
 		data.Events.Items = append(data.Events.Items, components.EventItem{
 			Minute:       minute,
 			EventType:    string(ev.EventType),
 			Player:       player,
 			Team:         team,
-			HomeScore:    ev.HomeScore,
-			AwayScore:    ev.AwayScore,
+			HomeScore:    hs,
+			AwayScore:    as,
 			CardType:     ev.CardType,
 			IsHome:       ev.Team == domain.SideHome,
 			Detail:       detail,
