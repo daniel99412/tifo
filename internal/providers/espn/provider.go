@@ -153,9 +153,12 @@ func (p *Provider) enrichPositions(fotmobDetails *domain.MatchDetails, rosters [
 	for _, r := range rosters {
 		rosterPos := make(map[string]string)
 		for _, player := range r.Roster {
+			abbr := player.Position.Abbreviation
+			if abbr == "" || abbr == "SUB" {
+				continue
+			}
 			key := normalizePlayerName(player.Athlete.DisplayName)
-			posName := player.Position.Abbreviation
-			rosterPos[key] = posName
+			rosterPos[key] = abbr
 		}
 
 		isHome := r.HomeAway == "home"
@@ -222,18 +225,61 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 		}
 	}
 
+	var homeTeamName string
 	for _, comp := range data.Summary.Header.Competitions {
 		for _, c := range comp.Competitors {
 			if c.HomeAway == "home" {
+				homeTeamName = c.Team.DisplayName
 				if out.ExtraInfo.HomeColor == "" {
 					out.ExtraInfo.HomeColor = c.Team.Color
+				}
+				if c.ShootoutScore != nil {
+					homePS := int(*c.ShootoutScore)
+					out.Match.PenScore = fmt.Sprintf("%d", homePS)
+					log.Printf("[espn] home shootoutScore=%.0f → PenScore=%s", *c.ShootoutScore, out.Match.PenScore)
 				}
 			} else {
 				if out.ExtraInfo.AwayColor == "" {
 					out.ExtraInfo.AwayColor = c.Team.Color
 				}
+				if c.ShootoutScore != nil {
+					awayPS := int(*c.ShootoutScore)
+					if out.Match.PenScore != "" {
+						out.Match.PenScore = fmt.Sprintf("%s-%d", out.Match.PenScore, awayPS)
+					} else {
+						out.Match.PenScore = fmt.Sprintf("0-%d", awayPS)
+					}
+					log.Printf("[espn] away shootoutScore=%.0f → PenScore=%s", *c.ShootoutScore, out.Match.PenScore)
+				}
 			}
 		}
+	}
+
+	// Individual penalty shots from shootout data
+	if len(data.Summary.Shootout) > 0 {
+		log.Printf("[espn] shootout data found: %d teams", len(data.Summary.Shootout))
+		var shots []domain.PenShot
+		for _, team := range data.Summary.Shootout {
+			teamSide := domain.SideAway
+			if team.Team == homeTeamName || team.Team == homeTeam {
+				teamSide = domain.SideHome
+			}
+			log.Printf("[espn] shootout team=%q side=%v shots=%d", team.Team, teamSide, len(team.Shots))
+			for _, s := range team.Shots {
+				shots = append(shots, domain.PenShot{
+					Team:   teamSide,
+					Player: s.Player,
+					Scored: s.DidScore,
+				})
+				log.Printf("[espn]   shot %d: player=%q scored=%v", s.ShotNumber, s.Player, s.DidScore)
+			}
+		}
+		out.Match.PenShootout = shots
+		if len(shots) > 0 {
+			log.Printf("[espn] PenShootout set with %d shots", len(shots))
+		}
+	} else {
+		log.Printf("[espn] no shootout data in response")
 	}
 
 	if fotmobDetails.Events == nil {
@@ -350,6 +396,9 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 		typ := classify(ke)
 		if typ == "" {
 			continue
+		}
+		if typ == domain.EvVideoReview || typ == domain.EvVAR {
+			log.Printf("[espn] VAR event detected: type=%q text=%q shortText=%q", ke.Type.Type, ke.Text, ke.ShortText)
 		}
 		minute, added := parseClock(ke.Clock.DisplayValue)
 
@@ -468,7 +517,19 @@ func classify(ke oldESPN.KeyEvent) domain.EventType {
 		return domain.EvPausa
 	case "end-delay":
 		return domain.EvContinua
+	case "start-extra-time":
+		if ke.Shootout {
+			return domain.EvPenShootout
+		}
+		return domain.EvAETStart
+	case "video-review":
+		return domain.EvVideoReview
+	case "var":
+		return domain.EvVAR
 	default:
+		if ke.Text != "" && (containsStr(strings.ToLower(ke.Text), "var") || containsStr(strings.ToLower(ke.Text), "video")) {
+			return domain.EvVideoReview
+		}
 		return ""
 	}
 }

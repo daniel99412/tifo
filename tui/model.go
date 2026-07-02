@@ -4,15 +4,16 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
+	espn "tifo/espn"
+	fotmob "tifo/fotmob"
 	"tifo/internal/domain"
 	"tifo/internal/enrich"
 	"tifo/internal/persistence/sqlite"
-	fotmobProvider "tifo/internal/providers/fotmob"
-	espnProvider "tifo/internal/providers/espn"
-	fotmob "tifo/fotmob"
-	espn "tifo/espn"
 	"tifo/internal/providers"
+	espnProvider "tifo/internal/providers/espn"
+	fotmobProvider "tifo/internal/providers/fotmob"
 	"tifo/internal/resolver"
 	"tifo/internal/services"
 	"tifo/ipapi"
@@ -80,8 +81,7 @@ var (
 			Foreground(lipgloss.Color("215"))
 )
 
-const uiTickInterval = 5 * time.Second
-const dataRefreshInterval = 30 * time.Second
+const dataRefreshInterval = 5 * time.Second
 
 type Model struct {
 	svc       *services.MatchService
@@ -108,7 +108,9 @@ type Model struct {
 	loadingDetail bool
 	detailErr     string
 	espnStatus    string
-	lastDataRefresh time.Time
+	detailMinute  int
+	detailUpdated time.Time
+	batchDone     bool
 }
 
 func New() Model {
@@ -166,7 +168,8 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		func() tea.Msg { return initSvcMsg{svc: buildService()} },
 		fetchIPLocation(m.ipapi),
-		tickCmd(),
+		renderTickCmd(),
+		dataTickCmd(),
 	)
 }
 
@@ -195,14 +198,22 @@ type matchesMsg struct {
 type detailsMsg struct {
 	details *domain.MatchDetails
 	err     error
+	batch   bool // true = from background batch, false = from manual Enter
 }
 
-type tickMsg struct{}
+type renderTickMsg struct{}
+type dataTickMsg struct{}
 
 // Commands
-func tickCmd() tea.Cmd {
-	return tea.Tick(uiTickInterval, func(t time.Time) tea.Msg {
-		return tickMsg{}
+func renderTickCmd() tea.Cmd {
+	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
+		return renderTickMsg{}
+	})
+}
+
+func dataTickCmd() tea.Cmd {
+	return tea.Tick(dataRefreshInterval, func(t time.Time) tea.Msg {
+		return dataTickMsg{}
 	})
 }
 
@@ -235,9 +246,98 @@ func fetchMatchDetails(svc *services.MatchService, matchID string, ctx services.
 		log.Printf("[TUI] fetchDetails match=%s league=%q time=%v home=%q away=%q",
 			matchID, ctx.LeagueName, ctx.UTCTime, ctx.HomeTeam, ctx.AwayTeam)
 		details, err := svc.MatchDetails(nil, matchID, ctx)
-		return detailsMsg{details: details, err: err}
+		return detailsMsg{details: details, err: err, batch: false}
 	}
 }
+
+// Worker pool semaphore for batch fetching — max 3 concurrent HTTP calls.
+var batchSem = make(chan struct{}, 3)
+
+// fetchBatchDetails is like fetchMatchDetails but uses MatchDetailsLight (no ESPN enrichment) and marks as batch.
+func fetchBatchDetails(svc *services.MatchService, matchID string) tea.Cmd {
+	return func() tea.Msg {
+		batchSem <- struct{}{}
+		defer func() { <-batchSem }()
+
+		log.Printf("[batch] fetching details for match %s", matchID)
+		details, err := svc.MatchDetailsLight(nil, matchID)
+		return detailsMsg{details: details, err: err, batch: true}
+	}
+}
+
+// batchFetchEnrichCmd returns a tea.Cmd that fetches light details for all live and finished matches
+// with a worker pool limited to 3 concurrent calls.
+func batchFetchEnrichCmd(svc *services.MatchService, matches []domain.Match) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, m := range matches {
+		if m.Status.State != domain.MatchLive && m.Status.State != domain.MatchFinished {
+			continue
+		}
+		id, ok := m.ExternalIDs.Get("fotmob")
+		if !ok || id == "" {
+			continue
+		}
+		cmds = append(cmds, fetchBatchDetails(svc, id))
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	log.Printf("[batch] queued %d batch detail fetches (concurrency limited to 3)", len(cmds))
+	return tea.Batch(cmds...)
+}
+
+// selectMatch sets selectedMatch from filtered matches and creates detail view, returning fetch commands.
+func (m *Model) selectMatch(idx int, matches []domain.Match) []tea.Cmd {
+	m.selectedMatch = nil
+	if matchID, ok := matches[idx].ExternalIDs.Get("fotmob"); ok {
+		for j := range m.matches {
+			if mid, ok2 := m.matches[j].ExternalIDs.Get("fotmob"); ok2 && mid == matchID {
+				m.selectedMatch = &m.matches[j]
+				break
+			}
+		}
+	}
+	if m.selectedMatch == nil {
+		m.selectedMatch = &matches[idx]
+	}
+
+	selMatch := m.selectedMatch
+	mdVal := components.NewMatchDetail(
+		selMatch.Home.Name,
+		selMatch.Away.Name,
+		selMatch.Status.ScoreStr,
+		statusLabel(selMatch.Status),
+		formatTime(selMatch.Status),
+		"",
+	)
+	if isMatchLive(*selMatch) {
+		minute := selMatch.Status.Detail
+		if minute == "" || minute == "En vivo" {
+			minute = computeMatchMinute(selMatch.Status.Kickoff, selMatch.Status.FirstHalfAddedTime)
+		}
+		mdVal.Minute = minute
+	}
+	mdVal.Tabs = components.NewTabs([]string{"Alineaciones", "Eventos", "Estadísticas", "H2H", "Lesiones"})
+	m.detailView = &mdVal
+	m.matchDetails = nil
+	m.detailErr = ""
+	m.loadingDetail = true
+
+	if sel := m.leftList.Selected(); sel != nil && m.svc != nil {
+		if id, ok := selMatch.ExternalIDs.Get("fotmob"); ok {
+			ctx := services.MatchContext{
+				HomeTeam:   selMatch.Home.Name,
+				AwayTeam:   selMatch.Away.Name,
+				UTCTime:    selMatch.Status.Kickoff,
+				LeagueName: sel.OriginalName,
+			}
+			return []tea.Cmd{fetchMatchDetails(m.svc, id, ctx)}
+		}
+	}
+	return nil
+}
+
+
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -293,129 +393,272 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case matchesMsg:
 		m.loadingMatch = false
-		if msg.err == nil {
-			m.lastDataRefresh = time.Now()
-			oldID := ""
-			if m.selectedMatch != nil {
-				if id, ok := m.selectedMatch.ExternalIDs.Get("fotmob"); ok {
-					oldID = id
+		if msg.err != nil {
+			return m, nil
+		}
+		oldID := ""
+		var savedPenScore *int
+		var savedAwayPenScore *int
+		var savedShootout []domain.PenShot
+		if m.selectedMatch != nil {
+			if id, ok := m.selectedMatch.ExternalIDs.Get("fotmob"); ok {
+				oldID = id
+			}
+			savedPenScore = m.selectedMatch.HomePenScore
+			savedAwayPenScore = m.selectedMatch.AwayPenScore
+			savedShootout = m.selectedMatch.PenShootout
+		}
+		m.matches = msg.matches
+		m.matchScroll = 0
+		m.matchIdx = 0
+		if oldID != "" {
+			found := false
+			for i := range m.matches {
+				if id, ok := m.matches[i].ExternalIDs.Get("fotmob"); ok && id == oldID {
+					m.selectedMatch = &m.matches[i]
+					// Restore enriched penalty data from previous details fetch
+					if savedPenScore != nil {
+						m.selectedMatch.HomePenScore = savedPenScore
+					}
+					if savedAwayPenScore != nil {
+						m.selectedMatch.AwayPenScore = savedAwayPenScore
+					}
+					if len(savedShootout) > 0 {
+						m.selectedMatch.PenShootout = savedShootout
+					}
+					found = true
+					log.Printf("[penalty] restored enriched data on matches refresh: homePen=%v awayPen=%v shootout=%d",
+						savedPenScore, savedAwayPenScore, len(savedShootout))
+					break
 				}
 			}
-			m.matches = msg.matches
-			m.matchScroll = 0
-			m.matchIdx = 0
-			if oldID != "" {
-				found := false
-				for i := range m.matches {
-					if id, ok := m.matches[i].ExternalIDs.Get("fotmob"); ok && id == oldID {
-						m.selectedMatch = &m.matches[i]
-						found = true
-						break
-					}
-				}
-				if !found {
-					m.selectedMatch = nil
-					m.detailView = nil
-					m.matchDetails = nil
-				}
+			if !found {
+				m.selectedMatch = nil
+				m.detailView = nil
+				m.matchDetails = nil
 			}
 		}
+		// Fire background batch (once per league load) to enrich matches with live time and penalty data.
+		if !m.batchDone {
+			m.batchDone = true
+			return m, batchFetchEnrichCmd(m.svc, m.matches)
+		}
+		return m, nil
 
 	case detailsMsg:
 		m.loadingDetail = false
 		if msg.err != nil {
-			m.detailErr = msg.err.Error()
-			m.matchDetails = nil
-			log.Printf("[TUI] detail error: %s", m.detailErr)
-			if m.detailView != nil {
-				m.detailView.SetError(msg.err.Error())
+			// Always log the error — don't propagate to detailView for batch errors
+			if !msg.batch {
+				m.detailErr = msg.err.Error()
+				m.matchDetails = nil
+				log.Printf("[TUI] detail error: %s", m.detailErr)
+				if m.detailView != nil {
+					m.detailView.SetError(msg.err.Error())
+				}
+			} else {
+				log.Printf("[batch] error for match: %v", msg.err)
 			}
-		} else {
+			break
+		}
+		// For all details (batch or manual): update penalty data on the live m.matches entry.
+		detailFotmobID, _ := msg.details.ExternalIDs.Get("fotmob")
+		if detailFotmobID != "" {
+			for i := range m.matches {
+				if id, ok := m.matches[i].ExternalIDs.Get("fotmob"); ok && id == detailFotmobID {
+					if msg.details.Match.PenScore != "" {
+						penParts := strings.Split(msg.details.Match.PenScore, "-")
+						if len(penParts) == 2 {
+							if hps, err := strconv.Atoi(strings.TrimSpace(penParts[0])); err == nil {
+								m.matches[i].HomePenScore = &hps
+							}
+							if aps, err := strconv.Atoi(strings.TrimSpace(penParts[1])); err == nil {
+								m.matches[i].AwayPenScore = &aps
+							}
+						}
+					}
+					if len(msg.details.Match.PenShootout) > 0 {
+						m.matches[i].PenShootout = msg.details.Match.PenShootout
+					}
+					log.Printf("[batch] updated m.matches[%d] with penalty data: homePen=%v awayPen=%v shootout=%d",
+						i, m.matches[i].HomePenScore, m.matches[i].AwayPenScore, len(m.matches[i].PenShootout))
+
+					// FirstHalfAddedTime from events
+					for _, ev := range msg.details.Events {
+						if ev.SortTime == 45 && ev.AddedTime > 0 {
+							m.matches[i].Status.FirstHalfAddedTime = ev.AddedTime
+							log.Printf("[clock] extracted FirstHalfAddedTime=%d for match %s", ev.AddedTime, detailFotmobID)
+							break
+						}
+					}
+
+					// If overall selectedMatch ref is stale, re-point it.
+					if m.selectedMatch != nil {
+						if sid, ok := m.selectedMatch.ExternalIDs.Get("fotmob"); ok && sid == detailFotmobID {
+							m.selectedMatch = &m.matches[i]
+						}
+					}
+					break
+				}
+			}
+		}
+		// Batch results stop here — no detail view updates.
+		if msg.batch {
+			break
+		}
+		// Manual (Enter) detail: update the detail view and selected match.
+		if msg.err == nil {
 			m.detailErr = ""
 			m.matchDetails = msg.details
-			m.lastDataRefresh = time.Now()
+			// Use LiveMinute as primary source, events as fallback
+			newMinute := msg.details.Match.LiveMinute
+			if newMinute == 0 {
+				newMinute = lastEventMinute(msg.details.Events)
+			}
+			// Only snap when the minute actually changed (avoids sawtooth)
+			if newMinute > 0 && newMinute != m.detailMinute {
+				m.detailMinute = newMinute
+				m.detailUpdated = time.Now()
+			}
+			// Extract FirstHalfAddedTime
+			for _, ev := range msg.details.Events {
+				if ev.SortTime == 45 && ev.AddedTime > 0 {
+					if m.selectedMatch != nil {
+						m.selectedMatch.Status.FirstHalfAddedTime = ev.AddedTime
+					}
+					break
+				}
+			}
 			if m.detailView != nil {
 				m.detailView.Details = buildFromDomain(msg.details, m.espnStatus)
-				if msg.details.Match.Score != "" {
+if msg.details.Match.Score != "" {
 					m.detailView.Score = msg.details.Match.Score
 					parts := strings.Split(msg.details.Match.Score, "-")
 					if len(parts) == 2 {
-						m.detailView.HomeScore = strings.TrimSpace(parts[0])
-						m.detailView.AwayScore = strings.TrimSpace(parts[1])
+						hs := strings.TrimSpace(parts[0])
+						as := strings.TrimSpace(parts[1])
+						m.detailView.HomeScore = hs
+						m.detailView.AwayScore = as
+						if m.selectedMatch != nil {
+							if hi, err := strconv.Atoi(hs); err == nil {
+								m.selectedMatch.HomeScore = &hi
+							}
+							if ai, err := strconv.Atoi(as); err == nil {
+								m.selectedMatch.AwayScore = &ai
+							}
+							m.selectedMatch.Status.ScoreStr = msg.details.Match.Score
+						}
 					}
 				}
-				m.detailView.WaterBreak = isWaterBreakActive(msg.details.Events)
-				if isHalfTime(msg.details.Events) {
-					m.detailView.Minute = "HT"
+				if msg.details.Match.PenScore != "" {
+					log.Printf("[penalty] PenScore=%q from details", msg.details.Match.PenScore)
+					m.detailView.PenScore = msg.details.Match.PenScore
+					penParts := strings.Split(msg.details.Match.PenScore, "-")
+					if len(penParts) == 2 && m.selectedMatch != nil {
+						if hps, err := strconv.Atoi(strings.TrimSpace(penParts[0])); err == nil {
+							m.selectedMatch.HomePenScore = &hps
+							log.Printf("[penalty] selectedMatch.HomePenScore=%d", hps)
+						}
+						if aps, err := strconv.Atoi(strings.TrimSpace(penParts[1])); err == nil {
+							m.selectedMatch.AwayPenScore = &aps
+							log.Printf("[penalty] selectedMatch.AwayPenScore=%d", aps)
+						}
+					} else {
+						log.Printf("[penalty] PenScore split failed: parts=%v, selectedMatch=%v", penParts, m.selectedMatch != nil)
+					}
+				} else {
+					log.Printf("[penalty] no PenScore in details MatchRef (PenScore=%q Score=%q)", msg.details.Match.PenScore, msg.details.Match.Score)
 				}
-				// If FT detected in events, mark match as finished
-				if m.selectedMatch != nil && isMatchFinished(*m.selectedMatch, msg.details.Events) {
-					m.selectedMatch.Status.State = domain.MatchFinished
-					m.detailView.Minute = ""
-					m.detailView.Status = statusLabel(m.selectedMatch.Status)
-					m.detailView.WaterBreak = false
+				if len(msg.details.Match.PenShootout) > 0 && m.selectedMatch != nil {
+					m.selectedMatch.PenShootout = msg.details.Match.PenShootout
+					log.Printf("[penalty] selectedMatch.PenShootout=%d shots", len(msg.details.Match.PenShootout))
+				} else {
+					log.Printf("[penalty] no PenShootout in details (len=%d, selectedMatch=%v)", len(msg.details.Match.PenShootout), m.selectedMatch != nil)
+				}
+				m.detailView.WaterBreak = isWaterBreakActive(msg.details.Events)
+				// Only override state from events if provider hasn't explicitly set it
+				if m.selectedMatch != nil {
+					if m.selectedMatch.Status.State == domain.MatchScheduled && isMatchFinished(*m.selectedMatch, msg.details.Events) {
+						m.selectedMatch.Status.State = domain.MatchFinished
+						m.detailView.Minute = ""
+						m.detailView.Status = statusLabel(m.selectedMatch.Status)
+						m.detailView.WaterBreak = false
+					} else {
+						log.Printf("[debug] match id=%s state=%s events=%d hasAET=%v hasFT=%v",
+							m.selectedMatch.TIFOID, m.selectedMatch.Status.State, len(msg.details.Events),
+							hasEventType(msg.details.Events, domain.EvAETStart, domain.EvAETS2, domain.EvPenShootout),
+							hasEventType(msg.details.Events, domain.EvFT))
+					}
 				}
 			}
 		}
 
-	case tickMsg:
-		cmds := []tea.Cmd{tickCmd()}
-		if m.svc == nil {
-			return m, tea.Batch(cmds...)
-		}
-
-		// Always update detail view minute/score immediately (local, no fetch)
+	case renderTickMsg:
+		// Refresh UI-only state (clock, score from local snapshot) every 1s
 		if m.selectedMatch != nil && m.detailView != nil {
 			if isMatchLive(*m.selectedMatch) {
-				minute := m.selectedMatch.Status.Detail
-				if minute == "" || minute == "En vivo" {
-					minute = computeMatchMinute(m.selectedMatch.Status.Kickoff)
+				if m.detailMinute > 0 && !m.detailUpdated.IsZero() {
+					m.detailView.Minute = computeMatchMinuteFromEvents(m.selectedMatch.Status.Kickoff, m.detailUpdated, m.detailMinute, m.selectedMatch.Status.FirstHalfAddedTime)
+					m.selectedMatch.Status.Detail = m.detailView.Minute
+				} else {
+					m.detailView.Minute = computeMatchMinute(m.selectedMatch.Status.Kickoff, m.selectedMatch.Status.FirstHalfAddedTime)
 				}
-				m.detailView.Minute = minute
-				if m.selectedMatch.HomeScore != nil && m.selectedMatch.AwayScore != nil {
-					score := fmt.Sprintf("%d-%d", *m.selectedMatch.HomeScore, *m.selectedMatch.AwayScore)
-					m.detailView.Score = score
-					m.detailView.HomeScore = fmt.Sprintf("%d", *m.selectedMatch.HomeScore)
-					m.detailView.AwayScore = fmt.Sprintf("%d", *m.selectedMatch.AwayScore)
+				if m.matchDetails != nil && isHalfTime(m.matchDetails.Events) {
+					m.detailView.Minute = "HT"
+					m.selectedMatch.Status.Detail = "HT"
 				}
+			if m.selectedMatch.HomeScore != nil && m.selectedMatch.AwayScore != nil {
+				m.detailView.Score = fmt.Sprintf("%d-%d", *m.selectedMatch.HomeScore, *m.selectedMatch.AwayScore)
+				m.detailView.HomeScore = fmt.Sprintf("%d", *m.selectedMatch.HomeScore)
+				m.detailView.AwayScore = fmt.Sprintf("%d", *m.selectedMatch.AwayScore)
+			}
+			if m.selectedMatch.HomePenScore != nil && m.selectedMatch.AwayPenScore != nil {
+				m.detailView.PenScore = fmt.Sprintf("%d-%d", *m.selectedMatch.HomePenScore, *m.selectedMatch.AwayPenScore)
+			}
+			if len(m.selectedMatch.PenShootout) > 0 {
+				m.detailView.PenShootout = m.selectedMatch.PenShootout
+			}
 			} else {
 				m.detailView.Minute = ""
 				m.detailView.WaterBreak = false
 				m.detailView.Status = statusLabel(m.selectedMatch.Status)
 			}
 		}
+		return m, renderTickCmd()
 
-		// Only fetch from API every dataRefreshInterval
+	case dataTickMsg:
+		// Fetch fresh data from API every 30s
+		cmds := []tea.Cmd{dataTickCmd()}
+		if m.svc == nil {
+			return m, tea.Batch(cmds...)
+		}
 		now := time.Now()
-		if now.Sub(m.lastDataRefresh) >= dataRefreshInterval {
-			m.lastDataRefresh = now
 
-			// Auto-refresh match list on today
-			if !m.loadingMatch {
-				today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-				if m.selDate.Equal(today) {
-					if sel := m.leftList.Selected(); sel != nil && len(m.leagues) > m.leftList.Cursor() {
-						if id, ok := m.leagues[m.leftList.Cursor()].ExternalIDs.Get("fotmob"); ok {
-							m.loadingMatch = true
-							cmds = append(cmds, fetchMatches(m.svc, id))
-						}
+		// Auto-refresh match list on today
+		if !m.loadingMatch {
+			today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+			if m.selDate.Equal(today) {
+				if sel := m.leftList.Selected(); sel != nil && len(m.leagues) > m.leftList.Cursor() {
+					if id, ok := m.leagues[m.leftList.Cursor()].ExternalIDs.Get("fotmob"); ok {
+						m.loadingMatch = true
+						cmds = append(cmds, fetchMatches(m.svc, id))
 					}
 				}
 			}
+		}
 
-			// Auto-refresh match details when in detail view on a live match
-			if m.selectedMatch != nil && !m.loadingDetail && isMatchLive(*m.selectedMatch) {
-				if id, ok := m.selectedMatch.ExternalIDs.Get("fotmob"); ok {
-					ctx := services.MatchContext{}
-					if sel := m.leftList.Selected(); sel != nil {
-						ctx.HomeTeam = m.selectedMatch.Home.Name
-						ctx.AwayTeam = m.selectedMatch.Away.Name
-						ctx.UTCTime = m.selectedMatch.Status.Kickoff
-						ctx.LeagueName = sel.OriginalName
-					}
-					m.loadingDetail = true
-					cmds = append(cmds, fetchMatchDetails(m.svc, id, ctx))
+		// Auto-refresh match details when in detail view on a live match
+		if m.selectedMatch != nil && !m.loadingDetail && isMatchLive(*m.selectedMatch) {
+			if id, ok := m.selectedMatch.ExternalIDs.Get("fotmob"); ok {
+				ctx := services.MatchContext{}
+				if sel := m.leftList.Selected(); sel != nil {
+					ctx.HomeTeam = m.selectedMatch.Home.Name
+					ctx.AwayTeam = m.selectedMatch.Away.Name
+					ctx.UTCTime = m.selectedMatch.Status.Kickoff
+					ctx.LeagueName = sel.OriginalName
 				}
+				m.loadingDetail = true
+				cmds = append(cmds, fetchMatchDetails(m.svc, id, ctx))
 			}
 		}
 
@@ -501,40 +744,11 @@ func (m Model) updateBrowse(msg tea.KeyMsg) (Model, tea.Cmd) {
 			idx = len(matches) - 1
 		}
 
-		m.selectedMatch = &matches[idx]
-		mdVal := components.NewMatchDetail(
-			matches[idx].Home.Name,
-			matches[idx].Away.Name,
-			matches[idx].Status.ScoreStr,
-			statusLabel(matches[idx].Status),
-			formatTime(matches[idx].Status),
-			"",
-		)
-		if isMatchLive(matches[idx]) {
-			minute := matches[idx].Status.Detail
-			if minute == "" || minute == "En vivo" {
-				minute = computeMatchMinute(matches[idx].Status.Kickoff)
-			}
-			mdVal.Minute = minute
+		cmds := m.selectMatch(idx, matches)
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
-		mdVal.Tabs = components.NewTabs([]string{"Alineaciones", "Eventos", "Estadísticas", "H2H", "Lesiones"})
-		m.detailView = &mdVal
-		m.matchDetails = nil
-		m.detailErr = ""
-		m.loadingDetail = true
-
-		// Build match context for enrichment
-		ctx := services.MatchContext{}
-		if sel := m.leftList.Selected(); sel != nil && m.svc != nil {
-			if id, ok := matches[idx].ExternalIDs.Get("fotmob"); ok {
-				ctx.HomeTeam = matches[idx].Home.Name
-				ctx.AwayTeam = matches[idx].Away.Name
-				ctx.UTCTime = matches[idx].Status.Kickoff
-				ctx.LeagueName = sel.OriginalName
-
-				return m, fetchMatchDetails(m.svc, id, ctx)
-			}
-		}
+		return m, nil
 
 	case "c":
 		m.showCalendar = true
@@ -545,6 +759,7 @@ func (m Model) updateBrowse(msg tea.KeyMsg) (Model, tea.Cmd) {
 		if sel != nil && len(m.leagues) > m.leftList.Cursor() {
 			if id, ok := m.leagues[m.leftList.Cursor()].ExternalIDs.Get("fotmob"); ok {
 				m.loadingMatch = true
+				m.batchDone = false
 				return m, fetchMatches(m.svc, id)
 			}
 		}
@@ -555,6 +770,7 @@ func (m Model) updateBrowse(msg tea.KeyMsg) (Model, tea.Cmd) {
 		if sel != nil && len(m.leagues) > m.leftList.Cursor() {
 			if id, ok := m.leagues[m.leftList.Cursor()].ExternalIDs.Get("fotmob"); ok {
 				m.loadingMatch = true
+				m.batchDone = false
 				return m, fetchMatches(m.svc, id)
 			}
 		}
@@ -744,7 +960,7 @@ func posAbbr(posID int, posName string) string {
 		return strings.ReplaceAll(posName, "-", "")
 	}
 	switch posID {
-	case 0, 1: return "POR"
+	case 1: return "POR"
 	case 2: return "DFC"
 	case 3: return "MC"
 	case 4: return "DC"
@@ -902,29 +1118,46 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 
 	// Extra info
 	data.Events.ExtraInfo = &components.MatchExtraInfo{
-		Venue:       d.ExtraInfo.Venue,
-		Attendance:  d.ExtraInfo.Attendance,
-		Referee:     d.ExtraInfo.Referee,
-		Weather:     d.ExtraInfo.Weather,
-		Broadcasts:  d.ExtraInfo.Broadcasts,
-		HomeColor:   d.ExtraInfo.HomeColor,
-		AwayColor:   d.ExtraInfo.AwayColor,
-		ESPNStatus:  espnStatus,
+		Venue:      d.ExtraInfo.Venue,
+		Attendance: d.ExtraInfo.Attendance,
+		Referee:    d.ExtraInfo.Referee,
+		Weather:    d.ExtraInfo.Weather,
+		Broadcasts: d.ExtraInfo.Broadcasts,
+		HomeColor:  d.ExtraInfo.HomeColor,
+		AwayColor:  d.ExtraInfo.AwayColor,
 	}
 
 	return data
+}
+
+func hasEventType(events []domain.MatchEvent, types ...domain.EventType) bool {
+	for _, ev := range events {
+		for _, t := range types {
+			if ev.EventType == t {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isMatchFinished(m domain.Match, events []domain.MatchEvent) bool {
 	if m.Status.State == domain.MatchFinished {
 		return true
 	}
+	hasAETOrPen := false
 	for _, ev := range events {
-		if ev.EventType == domain.EvFT {
+		if ev.EventType == domain.EvAETStart || ev.EventType == domain.EvAETS2 || ev.EventType == domain.EvPenShootout {
+			hasAETOrPen = true
+			break
+		}
+	}
+	for _, ev := range events {
+		if ev.EventType == domain.EvFT && !hasAETOrPen {
 			return true
 		}
 	}
-	if !m.Status.Kickoff.IsZero() && time.Since(m.Status.Kickoff) > 120*time.Minute {
+	if !m.Status.Kickoff.IsZero() && time.Since(m.Status.Kickoff) > 150*time.Minute {
 		return true
 	}
 	return false
@@ -938,14 +1171,12 @@ func isMatchLive(m domain.Match) bool {
 	case domain.MatchLive:
 		return true
 	case domain.MatchScheduled:
+		if m.HomeScore != nil && m.AwayScore != nil {
+			return true
+		}
 		if !m.Status.Kickoff.IsZero() {
 			elapsed := time.Since(m.Status.Kickoff)
-			if elapsed > 0 && elapsed < 120*time.Minute {
-				return true
-			}
-		}
-		if m.HomeScore != nil && m.AwayScore != nil && !m.Status.Kickoff.IsZero() {
-			if time.Since(m.Status.Kickoff) > 0 {
+			if elapsed > 0 && elapsed < 150*time.Minute {
 				return true
 			}
 		}
@@ -953,7 +1184,7 @@ func isMatchLive(m domain.Match) bool {
 	return false
 }
 
-func computeMatchMinute(ko time.Time) string {
+func computeMatchMinute(ko time.Time, added int) string {
 	if ko.IsZero() {
 		return ""
 	}
@@ -965,15 +1196,54 @@ func computeMatchMinute(ko time.Time) string {
 	case em < 45:
 		return fmt.Sprintf("%d:%02d", em, es)
 	case em < 48:
-		return fmt.Sprintf("45:%02d", es)
-	case em < 63:
+		return fmt.Sprintf("45+%d", es)
+	case em < 60+added:
 		return "HT"
-	default:
-		sm := em - 15
+	case em < 90+15+added:
+		sm := em - 15 - added
 		if sm < 90 {
 			return fmt.Sprintf("%d:%02d", sm, es)
 		}
-		return fmt.Sprintf("90:%02d", es)
+		return fmt.Sprintf("90+%d", sm-90)
+	default:
+		return fmt.Sprintf("ET %d+%d", em-105, es)
+	}
+}
+
+func computeMatchMinuteFromEvents(ko, lastUpdate time.Time, minute int, added int) string {
+	if minute <= 0 {
+		return computeMatchMinute(ko, added)
+	}
+
+	phaseSec := int(time.Since(lastUpdate).Seconds())
+	em := minute + phaseSec/60
+	es := phaseSec % 60
+
+	switch {
+	case em <= 45:
+		if em == 45 && es > 0 {
+			return fmt.Sprintf("45+%d", es)
+		}
+		return fmt.Sprintf("%d:%02d", em, es)
+	case em < 60:
+		return "HT"
+	case em <= 90:
+		if em == 90 && es > 0 {
+			return fmt.Sprintf("90+%d", es)
+		}
+		return fmt.Sprintf("%d:%02d", em, es)
+	case em <= 105:
+		if em == 105 && es > 0 {
+			return fmt.Sprintf("105+%d", es)
+		}
+		return fmt.Sprintf("%d", em)
+	case em <= 120:
+		if em == 120 && es > 0 {
+			return fmt.Sprintf("120+%d", es)
+		}
+		return fmt.Sprintf("%d", em)
+	default:
+		return fmt.Sprintf("%d", em)
 	}
 }
 
@@ -1002,6 +1272,24 @@ func isWaterBreakActive(events []domain.MatchEvent) bool {
 	return lastPause > lastResume
 }
 
+func lastEventMinute(events []domain.MatchEvent) int {
+	max := 0
+	for _, ev := range events {
+		switch ev.EventType {
+		case domain.EvHalf, domain.EvHT, domain.EvFT, domain.EvKO, domain.EvS2, domain.EvAddedTime, domain.EvPausa, domain.EvContinua:
+			continue
+		}
+		m := ev.SortTime
+		if ev.SortOverload > 0 && (ev.SortTime == 45 || ev.SortTime == 90 || ev.SortTime == 105) {
+			m += ev.SortOverload
+		}
+		if m > max {
+			max = m
+		}
+	}
+	return max
+}
+
 func isHalfTime(events []domain.MatchEvent) bool {
 	if len(events) == 0 {
 		return false
@@ -1016,6 +1304,8 @@ func isHalfTime(events []domain.MatchEvent) bool {
 	})
 	lastHT := -1
 	lastS2 := -1
+	lastAET := -1
+	lastEventMinute := 0
 	for i, ev := range sorted {
 		if ev.EventType == domain.EvHalf && ev.HalfStr == "HT" {
 			lastHT = i
@@ -1023,8 +1313,23 @@ func isHalfTime(events []domain.MatchEvent) bool {
 		if ev.EventType == domain.EvS2 {
 			lastS2 = i
 		}
+		if ev.EventType == domain.EvAETStart {
+			lastAET = i
+		}
+		if ev.SortTime > lastEventMinute {
+			lastEventMinute = ev.SortTime
+		}
 	}
-	return lastHT > lastS2
+	if lastHT == -1 {
+		return false
+	}
+	if lastAET > lastHT {
+		return false
+	}
+	if lastS2 > lastHT {
+		return false
+	}
+	return lastEventMinute < 60
 }
 
 func padRight(s string, w int) string {
@@ -1043,6 +1348,25 @@ func padCenter(s string, w int) string {
 	return s
 }
 
+func truncate(s string, w int) string {
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	runes := []rune(s)
+	var out strings.Builder
+	width := 0
+	for _, r := range runes {
+		rw := lipgloss.Width(string(r))
+		if width+rw > w-1 {
+			break
+		}
+		out.WriteRune(r)
+		width += rw
+	}
+	out.WriteRune('…')
+	return out.String()
+}
+
 func formatMatch(m domain.Match) string {
 	ko := m.Status.Kickoff
 	timeStr := "--:--"
@@ -1050,7 +1374,7 @@ func formatMatch(m domain.Match) string {
 		timeStr = ko.In(time.Local).Format("15:04")
 	}
 
-	// Col 1: marcador en vivo
+	// Col 1: live indicator
 	var col1 string
 	if isMatchLive(m) {
 		col1 = liveIndicatorStyle.Render("●")
@@ -1058,47 +1382,126 @@ func formatMatch(m domain.Match) string {
 		col1 = " "
 	}
 
-	// Col 2: horario / minuto de juego
+	// Col 2: time / minute
 	var col2 string
 	if isMatchLive(m) {
 		minute := m.Status.Detail
 		if minute == "" || minute == "En vivo" {
-			minute = computeMatchMinute(ko)
+			minute = computeMatchMinute(ko, m.Status.FirstHalfAddedTime)
 		}
 		col2 = liveMinuteStyle.Render(minute)
 	} else {
 		col2 = matchTimeStyle.Render(timeStr)
 	}
 
-	// Col 3: equipo local
-	col3 := matchStyle.Render(m.Home.Name)
-
-	// Col 4: vs / resultado
-	var col4 string
-	if m.HomeScore != nil && m.AwayScore != nil {
-		col4 = matchScoreStyle.Render(fmt.Sprintf("%d : %d", *m.HomeScore, *m.AwayScore))
-	} else if isMatchLive(m) {
-		col4 = matchScoreStyle.Render("0 : 0")
-		log.Printf("[score] live match %q %q state=%s scoreStr=%q homeScore=%v awayScore=%v",
-			m.Home.Name, m.Away.Name, m.Status.State, m.Status.ScoreStr,
-			m.HomeScore, m.AwayScore)
-	} else {
-		col4 = vsStyle.Render("vs")
-	}
-
-	// Col 5: equipo visitante
-	col5 := matchStyle.Render(m.Away.Name)
-
 	const c1W = 2
 	const c2W = 6
-	const c3W = 18
-	const c4W = 7
+	const c3W = 25
+	const c4W = 3
+	const c5W = 25
+	const c6W = 5
+
+	// Col 3: home team
+	col3 := matchStyle.Render(truncate(m.Home.Name, c3W))
+
+	// Col 4: vs (always)
+	col4 := vsStyle.Render("vs")
+
+	// Col 5: away team
+	col5 := matchStyle.Render(truncate(m.Away.Name, c5W))
+
+	// Col 6: info extra (FT / HT / ET / PEN / minute)
+	var col6 string
+	if m.HomePenScore != nil && m.AwayPenScore != nil {
+		col6 = matchScoreStyle.Render("PEN")
+	} else if m.Status.State == domain.MatchFinished {
+		if m.Status.Period >= domain.PeriodETFirstHalf {
+			col6 = matchScoreStyle.Render("ET")
+		} else {
+			col6 = matchScoreStyle.Render("FT")
+		}
+	} else if isMatchLive(m) {
+		d := m.Status.Detail
+		if d == "HT" || d == "Descanso" {
+			col6 = matchScoreStyle.Render("HT")
+		} else {
+			col6 = matchStyle.Render(d)
+		}
+	}
+
+	// Col 7: score + penalties
+	col7 := formatPenScore(m)
 
 	return padRight(col1, c1W) +
 		padRight(col2, c2W) +
 		padRight(col3, c3W) +
 		padCenter(col4, c4W) +
-		col5
+		padRight(col5, c5W) +
+		padRight(col6, c6W) +
+		col7
+}
+
+func formatPenScore(m domain.Match) string {
+	if len(m.PenShootout) > 0 {
+		score := fmt.Sprintf("%d : %d", *m.HomeScore, *m.AwayScore)
+		score += " (" + formatPenShots(m.PenShootout) + ")"
+		log.Printf("[score] PenShootout display: %s", score)
+		return matchScoreStyle.Render(score)
+	}
+	if m.HomePenScore != nil && m.AwayPenScore != nil && m.HomeScore != nil && m.AwayScore != nil {
+		score := fmt.Sprintf("%d : %d (%d : %d)", *m.HomeScore, *m.AwayScore, *m.HomePenScore, *m.AwayPenScore)
+		log.Printf("[score] penalties display: %s (match=%q)", score, m.Home.Name)
+		return matchScoreStyle.Render(score)
+	}
+	if m.HomeScore != nil && m.AwayScore != nil {
+		log.Printf("[score] regular display: %d:%d (match=%q, homePen=%v awayPen=%v)",
+			*m.HomeScore, *m.AwayScore, m.Home.Name, m.HomePenScore, m.AwayPenScore)
+		return matchScoreStyle.Render(fmt.Sprintf("%d : %d", *m.HomeScore, *m.AwayScore))
+	}
+	if isMatchLive(m) {
+		log.Printf("[score] live match %q %q state=%s scoreStr=%q homeScore=%v awayScore=%v",
+			m.Home.Name, m.Away.Name, m.Status.State, m.Status.ScoreStr,
+			m.HomeScore, m.AwayScore)
+		return matchScoreStyle.Render("0 : 0")
+	}
+	log.Printf("[score] no score for match %q (state=%s)", m.Home.Name, m.Status.State)
+	return ""
+}
+
+func formatPenShots(shots []domain.PenShot) string {
+	if len(shots) == 0 {
+		return ""
+	}
+	const maxRounds = 5
+	homeChars := make([]bool, 0, maxRounds)
+	awayChars := make([]bool, 0, maxRounds)
+	for _, s := range shots {
+		if s.Team == domain.SideHome {
+			homeChars = append(homeChars, s.Scored)
+		} else {
+			awayChars = append(awayChars, s.Scored)
+		}
+	}
+	homeStr := formatPenSide(homeChars, maxRounds)
+	awayStr := formatPenSide(awayChars, maxRounds)
+	return fmt.Sprintf("%s : %s", homeStr, awayStr)
+}
+
+func formatPenSide(results []bool, maxRounds int) string {
+	var sb strings.Builder
+	for _, scored := range results {
+		if scored {
+			sb.WriteString("✓ ")
+		} else {
+			sb.WriteString("X ")
+		}
+	}
+	if len(results) < maxRounds {
+		for i := 0; i < maxRounds-len(results); i++ {
+			sb.WriteString("〇 ")
+		}
+	}
+	return strings.TrimRight(sb.String(), " ")
 }
 
 func statusLabel(s domain.MatchStatus) string {

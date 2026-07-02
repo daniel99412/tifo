@@ -15,12 +15,46 @@ type Team struct {
 	Score *int        `json:"score"`
 }
 
+type LiveTime struct {
+	Short      string      `json:"short"`
+	ShortKey   string      `json:"shortKey"`
+	Long       string      `json:"long"`
+	LongKey    string      `json:"longKey"`
+	MaxTime    int         `json:"maxTime"`
+	BasePeriod int         `json:"basePeriod"`
+	Penalties  interface{} `json:"penalties"`
+	AddedTime  int         `json:"addedTime"`
+}
+
+type FotmobReason struct {
+	Short     string `json:"short"`
+	ShortKey  string `json:"shortKey"`
+	Long      string `json:"long"`
+	LongKey   string `json:"longKey"`
+	Penalties []int  `json:"penalties"`
+}
+
+type Halfs struct {
+	FirstHalfStarted       string `json:"firstHalfStarted"`
+	FirstHalfEnded         string `json:"firstHalfEnded"`
+	SecondHalfStarted      string `json:"secondHalfStarted"`
+	SecondHalfEnded        string `json:"secondHalfEnded"`
+	FirstExtraHalfStarted  string `json:"firstExtraHalfStarted"`
+	SecondExtraHalfStarted string `json:"secondExtraHalfStarted"`
+	GameEnded              string `json:"gameEnded"`
+}
+
 type MatchStatus struct {
-	UTCTime   string `json:"utcTime"`
-	Started   bool   `json:"started"`
-	Finished  bool   `json:"finished"`
-	Cancelled bool   `json:"cancelled"`
-	ScoreStr  string `json:"scoreStr"`
+	UTCTime              string         `json:"utcTime"`
+	Started              bool           `json:"started"`
+	Finished             bool           `json:"finished"`
+	Cancelled            bool           `json:"cancelled"`
+	Awarded              bool           `json:"awarded,omitempty"`
+	ScoreStr             string         `json:"scoreStr"`
+	LiveTime             *LiveTime      `json:"liveTime,omitempty"`
+	Halfs                *Halfs         `json:"halfs,omitempty"`
+	Reason               *FotmobReason  `json:"reason,omitempty"`
+	WhoLostOnPenalties   string         `json:"whoLostOnPenalties,omitempty"`
 }
 
 type Match struct {
@@ -131,23 +165,24 @@ type MatchDetailsContent struct {
 }
 
 type MatchEvent struct {
-	Type             string      `json:"type"`
-	Time             int         `json:"time"`
-	OverloadTime     *int        `json:"overloadTime"`
+	Type             string       `json:"type"`
+	Time             int          `json:"time"`
+	OverloadTime     *int         `json:"overloadTime"`
 	Player           *EventPlayer `json:"player"`
-	IsHome           bool        `json:"isHome"`
-	HomeScore        int         `json:"homeScore"`
-	AwayScore        int         `json:"awayScore"`
-	Card             string      `json:"card"`
-	CardDescription  string      `json:"cardDescription"`
-	Swap             []EventSwap `json:"swap"`
+	IsHome           bool         `json:"isHome"`
+	HomeScore        int          `json:"homeScore"`
+	AwayScore        int          `json:"awayScore"`
+	Card             string       `json:"card"`
+	CardDescription  interface{}  `json:"cardDescription"`
+	Swap             []EventSwap  `json:"swap"`
 	Assist           *EventPlayer `json:"assist"`
-	MinutesAddedInput int        `json:"minutesAddedInput"`
-	MinutesAddedStr  string      `json:"minutesAddedStr"`
-	HalfStrShort     string      `json:"halfStrShort"`
-	GoalDescription  string      `json:"goalDescription"`
-	OwnGoal          interface{} `json:"ownGoal"`
-	InjuredPlayerOut bool        `json:"injuredPlayerOut"`
+	MinutesAddedInput int         `json:"minutesAddedInput"`
+	MinutesAddedStr  string       `json:"minutesAddedStr"`
+	HalfStrShort     string       `json:"halfStrShort"`
+	GoalDescription  string       `json:"goalDescription"`
+	OwnGoal          interface{}  `json:"ownGoal"`
+	InjuredPlayerOut bool         `json:"injuredPlayerOut"`
+	PenaltyScore     []int        `json:"penaltyScore,omitempty"`
 }
 
 type EventPlayer struct {

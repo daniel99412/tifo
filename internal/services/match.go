@@ -44,6 +44,11 @@ func (s *MatchService) LeagueMatches(ctx context.Context, competitionID string) 
 	return s.primary.LeagueMatches(ctx, competitionID)
 }
 
+// MatchDetailsLight fetches details from primary provider only (no ESPN enrichment).
+func (s *MatchService) MatchDetailsLight(ctx context.Context, matchID string) (*domain.MatchDetails, error) {
+	return s.primary.MatchDetails(ctx, matchID)
+}
+
 // MatchDetails fetches details from primary and enriches with all enrichment providers.
 func (s *MatchService) MatchDetails(ctx context.Context, matchID string, ctxProvider ...MatchContext) (*domain.MatchDetails, error) {
 	details, err := s.primary.MatchDetails(ctx, matchID)

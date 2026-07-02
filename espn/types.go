@@ -44,17 +44,30 @@ type ScoreboardBroadcast struct {
 	Names  []string `json:"names"`
 }
 
+type ShootoutTeam struct {
+	ID    string         `json:"id"`
+	Team  string         `json:"team"`
+	Shots []ShootoutShot `json:"shots"`
+}
+
+type ShootoutShot struct {
+	ShotNumber int    `json:"shotNumber"`
+	Player     string `json:"player"`
+	DidScore   bool   `json:"didScore"`
+}
+
 type SummaryResponse struct {
-	Header         SummaryHeader    `json:"header"`
-	GameInfo       GameInfo         `json:"gameInfo"`
-	KeyEvents      []KeyEvent       `json:"keyEvents"`
-	Commentary     []CommentaryItem `json:"commentary"`
-	Format         Format           `json:"format"`
-	Boxscore       Boxscore         `json:"boxscore"`
-	Broadcasts     []SummaryBroadcast `json:"broadcasts"`
-	Odds           []Odds           `json:"odds"`
-	Rosters        []SummaryRoster  `json:"rosters"`
-	HeadToHeadGames []HeadToHeadTeamEvents `json:"headToHeadGames,omitempty"`
+	Header          SummaryHeader             `json:"header"`
+	GameInfo        GameInfo                  `json:"gameInfo"`
+	KeyEvents       []KeyEvent                `json:"keyEvents"`
+	Commentary      []CommentaryItem          `json:"commentary"`
+	Format          Format                    `json:"format"`
+	Boxscore        Boxscore                  `json:"boxscore"`
+	Broadcasts      []SummaryBroadcast        `json:"broadcasts"`
+	Odds            []Odds                    `json:"odds"`
+	Rosters         []SummaryRoster           `json:"rosters"`
+	HeadToHeadGames []HeadToHeadTeamEvents    `json:"headToHeadGames,omitempty"`
+	Shootout        []ShootoutTeam            `json:"shootout,omitempty"`
 }
 
 type SummaryHeader struct {
@@ -69,11 +82,12 @@ type SummaryComp struct {
 }
 
 type SummaryCompetitor struct {
-	ID       string `json:"id"`
-	HomeAway string `json:"homeAway"`
-	Score    string `json:"score"`
-	Winner   bool   `json:"winner"`
-	Team     struct {
+	ID             string  `json:"id"`
+	HomeAway       string  `json:"homeAway"`
+	Score          string  `json:"score"`
+	Winner         bool    `json:"winner"`
+	ShootoutScore  *float64 `json:"shootoutScore,omitempty"`
+	Team           struct {
 		ID             string `json:"id"`
 		DisplayName    string `json:"displayName"`
 		Abbreviation   string `json:"abbreviation"`

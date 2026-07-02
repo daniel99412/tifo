@@ -165,11 +165,30 @@ func (p *Provider) mapMatchDetails(d *oldFotmob.MatchDetailsResponse) (*domain.M
 		md.Match.Score = fmt.Sprintf("%d-%d", d.Header.Teams[0].Score, d.Header.Teams[1].Score)
 	}
 
+	if d.Header.Status.Reason != nil {
+		log.Printf("[fotmob] Reason found: short=%q long=%q penalties=%v",
+			d.Header.Status.Reason.Short, d.Header.Status.Reason.Long, d.Header.Status.Reason.Penalties)
+		if len(d.Header.Status.Reason.Penalties) == 2 {
+			md.Match.PenScore = fmt.Sprintf("%d-%d", d.Header.Status.Reason.Penalties[0], d.Header.Status.Reason.Penalties[1])
+			log.Printf("[fotmob] PenScore set to %q", md.Match.PenScore)
+		} else {
+			log.Printf("[fotmob] Reason.Penalties unexpected length: %d", len(d.Header.Status.Reason.Penalties))
+		}
+	} else {
+		log.Printf("[fotmob] No Reason in header.status (reason field may not exist in response)")
+	}
+
+	if lt := d.Header.Status.LiveTime; lt != nil {
+		md.Match.LiveMinute = lt.MaxTime
+		log.Printf("[fotmob] LiveTime: maxTime=%d short=%q addedTime=%d", lt.MaxTime, lt.Short, lt.AddedTime)
+	}
+
 	// Lineups
 	md.Lineups = p.mapLineups(d)
 
 	// Events
 	md.Events = p.mapEvents(d)
+	md.Events = p.addExtraTimeEvents(d, md.Events)
 
 	// Statistics
 	md.Statistics = p.mapStats(d)
@@ -253,6 +272,9 @@ func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEv
 		if ev.Type == "Half" && ev.HalfStrShort == "FT" {
 			eventType = domain.EvFT
 		}
+		if ev.Type == "PenaltyShootout" {
+			eventType = domain.EvPenShootout
+		}
 		team := domain.SideHome
 		if !ev.IsHome {
 			team = domain.SideAway
@@ -328,6 +350,72 @@ func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEv
 		}
 		return ti < tj
 	})
+
+	return events
+}
+
+func (p *Provider) addExtraTimeEvents(d *oldFotmob.MatchDetailsResponse, events []domain.MatchEvent) []domain.MatchEvent {
+	hs := d.Header.Status.Halfs
+	if hs == nil || hs.FirstExtraHalfStarted == "" {
+		if hs != nil {
+			log.Printf("[fotmob] addExtraTimeEvents: Halfs present but FirstExtraHalfStarted empty")
+		} else {
+			log.Printf("[fotmob] addExtraTimeEvents: Halfs is nil — API response may not include halfs field")
+		}
+		return events
+	}
+	log.Printf("[fotmob] addExtraTimeEvents: ET detected firstET=%q secondET=%q", hs.FirstExtraHalfStarted, hs.SecondExtraHalfStarted)
+
+	// Find max overload for FT (90' events) so AET sorts right after it
+	maxOverload90 := 0
+	for _, ev := range events {
+		if ev.SortTime == 90 && ev.SortOverload > maxOverload90 {
+			maxOverload90 = ev.SortOverload
+		}
+	}
+
+	hasAET := false
+	for _, ev := range events {
+		if ev.EventType == domain.EvAETStart {
+			hasAET = true
+			break
+		}
+	}
+
+	if !hasAET {
+		events = append(events, domain.MatchEvent{
+			Minute:       90,
+			EventType:    domain.EvAETStart,
+			Detail:       "Inicio del tiempo extra",
+			SortTime:     90,
+			SortOverload: maxOverload90 + 2,
+		})
+	}
+
+	if hs.SecondExtraHalfStarted != "" {
+		hasAETS2 := false
+		for _, ev := range events {
+			if ev.EventType == domain.EvAETS2 {
+				hasAETS2 = true
+				break
+			}
+		}
+		if !hasAETS2 {
+			maxOverload105 := 0
+			for _, ev := range events {
+				if ev.SortTime == 105 && ev.SortOverload > maxOverload105 {
+					maxOverload105 = ev.SortOverload
+				}
+			}
+			events = append(events, domain.MatchEvent{
+				Minute:       105,
+				EventType:    domain.EvAETS2,
+				Detail:       "Segundo tiempo extra",
+				SortTime:     105,
+				SortOverload: maxOverload105 + 1,
+			})
+		}
+	}
 
 	return events
 }
@@ -445,6 +533,7 @@ func playerRef(ev *oldFotmob.EventPlayer) *domain.PlayerRef {
 
 func parseUTCTime(utc string) time.Time {
 	layouts := []string{
+		time.RFC3339Nano,
 		time.RFC3339,
 		"2006-01-02 15:04:05",
 		"2006-01-02T15:04:05",
@@ -499,3 +588,5 @@ func teamIDMatch(id interface{}, teamID int) bool {
 	}
 	return false
 }
+
+

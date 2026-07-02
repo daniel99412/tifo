@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"tifo/internal/domain"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -36,24 +37,9 @@ var (
 			Align(lipgloss.Center)
 
 	mdSectionHeader = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("39")).
-				PaddingBottom(1)
-
-	mdStatHome = lipgloss.NewStyle().
-			Width(8).
-			Align(lipgloss.Right).
-			Foreground(lipgloss.Color("255"))
-
-	mdStatLabel = lipgloss.NewStyle().
-			Width(20).
-			Align(lipgloss.Center).
-			Foreground(lipgloss.Color("240"))
-
-	mdStatAway = lipgloss.NewStyle().
-			Width(8).
-			Align(lipgloss.Left).
-			Foreground(lipgloss.Color("255"))
+			Bold(true).
+			Foreground(lipgloss.Color("39")).
+			PaddingBottom(1)
 
 	mdPlayerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("255"))
@@ -118,6 +104,8 @@ type MatchDetail struct {
 	MatchID     string
 	HomeScore   string
 	AwayScore   string
+	PenScore    string
+	PenShootout []domain.PenShot
 	Minute      string
 	WaterBreak  bool
 	Tabs        Tabs
@@ -126,6 +114,7 @@ type MatchDetail struct {
 	MaxScroll   int
 	Error       string
 }
+
 
 type MatchDetailData struct {
 	Stats     []StatCategory
@@ -169,16 +158,17 @@ type EventData struct {
 }
 
 type MatchExtraInfo struct {
-	Venue       string
-	Attendance  int
-	Referee     string
-	Weather     string
-	Broadcasts  []string
-	ESPNStatus  string
-	HomeColor   string
-	AwayColor   string
+	Venue        string
+	Attendance   int
+	Referee      string
+	Weather      string
+	Broadcasts   []string
+	ESPNStatus   string
+	HomeColor    string
+	AwayColor    string
 	HomeAltColor string
 	AwayAltColor string
+
 }
 
 type EventItem struct {
@@ -293,7 +283,17 @@ func (md *MatchDetail) Render(width, height int) string {
 	lines = append(lines, "")
 	scoreCell := ""
 	if md.HomeScore != "" && md.AwayScore != "" {
-		scoreCell = mdScoreStyle.Render(fmt.Sprintf(" %s - %s ", md.HomeScore, md.AwayScore))
+		scoreText := fmt.Sprintf(" %s - %s ", md.HomeScore, md.AwayScore)
+		if len(md.PenShootout) > 0 {
+			livePen := formatPenShots(md.PenShootout)
+			scoreText += fmt.Sprintf("(%s) ", livePen)
+		} else if md.PenScore != "" {
+			penParts := strings.Split(md.PenScore, "-")
+			if len(penParts) == 2 {
+				scoreText += fmt.Sprintf("(%s - %s) ", strings.TrimSpace(penParts[0]), strings.TrimSpace(penParts[1]))
+			}
+		}
+		scoreCell = mdScoreStyle.Render(scoreText)
 	} else if md.Score != "" {
 		scoreCell = mdScoreStyle.Render(fmt.Sprintf(" %s ", md.Score))
 	} else {
@@ -418,35 +418,50 @@ func parseFloatVal(s string) (float64, bool) {
 	return 0, false
 }
 
-func statBar(leftVal, rightVal string, barW int) string {
-	lv, lOK := parseFloatVal(leftVal)
-	rv, rOK := parseFloatVal(rightVal)
-
-	if barW < 6 {
-		barW = 6
+func statBarSplit(homeVal, awayVal float64, homeOK, awayOK bool, halfW int, homeColor, awayColor lipgloss.Color) string {
+	if halfW < 4 {
+		halfW = 4
 	}
+	dimColor := lipgloss.Color("238")
+	sepColor := lipgloss.Color("240")
 
-	if !lOK && !rOK {
-		return strings.Repeat("░", barW)
-	}
-
-	max := lv
-	if rv > max {
-		max = rv
-	}
-	if max == 0 {
-		max = 1
+	if !homeOK && !awayOK {
+		empty := lipgloss.NewStyle().Foreground(dimColor).Render(strings.Repeat("░", halfW))
+		sep := lipgloss.NewStyle().Foreground(sepColor).Render("│")
+		return empty + sep + empty
 	}
 
-	fill := int(lv / max * float64(barW))
-	if fill < 0 {
-		fill = 0
-	}
-	if fill > barW {
-		fill = barW
+	total := homeVal + awayVal
+	if total == 0 {
+		total = 1
 	}
 
-	return strings.Repeat("█", fill) + strings.Repeat("░", barW-fill)
+	homeFill := int((homeVal / total) * float64(halfW))
+	awayFill := int((awayVal / total) * float64(halfW))
+	if homeVal > 0 && homeFill == 0 {
+		homeFill = 1
+	}
+	if awayVal > 0 && awayFill == 0 {
+		awayFill = 1
+	}
+	if homeFill > halfW {
+		homeFill = halfW
+	}
+	if awayFill > halfW {
+		awayFill = halfW
+	}
+
+	homeEmpty := halfW - homeFill
+	awayEmpty := halfW - awayFill
+
+	homeBar := lipgloss.NewStyle().Foreground(dimColor).Render(strings.Repeat("░", homeEmpty)) +
+		lipgloss.NewStyle().Foreground(homeColor).Render(strings.Repeat("█", homeFill))
+
+	awayBar := lipgloss.NewStyle().Foreground(awayColor).Render(strings.Repeat("█", awayFill)) +
+		lipgloss.NewStyle().Foreground(dimColor).Render(strings.Repeat("░", awayEmpty))
+
+	sep := lipgloss.NewStyle().Foreground(sepColor).Render("│")
+	return homeBar + sep + awayBar
 }
 
 func displayVal(s string) string {
@@ -461,8 +476,8 @@ func (md *MatchDetail) renderStats(width, height int) string {
 		return mdInfoStyle.Render("sin estadísticas")
 	}
 
-	homeColor := lipgloss.Color("255")
-	awayColor := lipgloss.Color("255")
+	homeColor := lipgloss.Color("51")
+	awayColor := lipgloss.Color("196")
 	if md.Details.Events.ExtraInfo != nil {
 		if md.Details.Events.ExtraInfo.HomeColor != "" {
 			c := md.Details.Events.ExtraInfo.HomeColor
@@ -476,53 +491,95 @@ func (md *MatchDetail) renderStats(width, height int) string {
 		}
 	}
 
-	maxStatW := (width - 30)
-	if maxStatW < 10 {
-		maxStatW = 10
+	labelW := 14
+	valW := 5
+	available := width - labelW - valW*2 - 4
+	halfW := available / 2
+	if halfW < 6 {
+		halfW = 6
 	}
-	if maxStatW > 40 {
-		maxStatW = 40
+	if halfW > 20 {
+		halfW = 20
 	}
-	barW := maxStatW
 
-	homeNumStyle := lipgloss.NewStyle().Width(6).Align(lipgloss.Right).Bold(true).Foreground(homeColor)
-	awayNumStyle := lipgloss.NewStyle().Width(6).Align(lipgloss.Left).Bold(true).Foreground(awayColor)
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	homeWinStyle := lipgloss.NewStyle().Width(valW).Align(lipgloss.Right).Bold(true).Foreground(homeColor)
+	awayWinStyle := lipgloss.NewStyle().Width(valW).Align(lipgloss.Left).Bold(true).Foreground(awayColor)
+	homeLoseStyle := lipgloss.NewStyle().Width(valW).Align(lipgloss.Right).Foreground(lipgloss.Color("240"))
+	awayLoseStyle := lipgloss.NewStyle().Width(valW).Align(lipgloss.Left).Foreground(lipgloss.Color("240"))
+	homeTieStyle := lipgloss.NewStyle().Width(valW).Align(lipgloss.Right).Foreground(lipgloss.Color("255"))
+	awayTieStyle := lipgloss.NewStyle().Width(valW).Align(lipgloss.Left).Foreground(lipgloss.Color("255"))
+	labelStyle := lipgloss.NewStyle().Width(labelW).Align(lipgloss.Left).Foreground(lipgloss.Color("240"))
+
+	homeName := md.HomeName
+	awayName := md.AwayName
+	if len(homeName) > 14 { homeName = homeName[:13] + "…" }
+	if len(awayName) > 14 { awayName = awayName[:13] + "…" }
+
+	scoreStr := fmt.Sprintf("%s %s - %s %s", homeName, md.HomeScore, md.AwayScore, awayName)
+	header := lipgloss.NewStyle().
+		Width(width).
+		Align(lipgloss.Center).
+		Foreground(lipgloss.Color("51")).
+		Bold(true).
+		Render(scoreStr)
+
+	sep := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("238")).
+		Render(strings.Repeat("─", width))
 
 	var lines []string
+	lines = append(lines, header, "", sep, "")
+
 	for _, cat := range md.Details.Stats {
 		lines = append(lines, mdSectionHeader.Render(cat.Title))
 		for _, stat := range cat.Stats {
-			labelWidth := barW + 12
-			lines = append(lines, mdInfoStyle.Width(labelWidth).Align(lipgloss.Center).Render(stat.Label))
-			bar := statBar(stat.Home, stat.Away, barW)
-			barColor := lipgloss.Color("240")
-			homeVal := displayVal(stat.Home)
-			awayVal := displayVal(stat.Away)
-			// Color the bar with the higher team's color
-			if h, hOK := parseFloatVal(stat.Home); hOK {
-				if a, aOK := parseFloatVal(stat.Away); aOK {
-					if h >= a {
-						barColor = homeColor
-					} else {
-						barColor = awayColor
-					}
+			hv, hOK := parseFloatVal(stat.Home)
+			av, aOK := parseFloatVal(stat.Away)
+
+			homeValStr := displayVal(stat.Home)
+			awayValStr := displayVal(stat.Away)
+
+			var homeStyled, awayStyled string
+			if hOK && aOK {
+				if hv > av {
+					homeStyled = homeWinStyle.Render(homeValStr)
+					awayStyled = awayLoseStyle.Render(awayValStr)
+				} else if av > hv {
+					homeStyled = homeLoseStyle.Render(homeValStr)
+					awayStyled = awayWinStyle.Render(awayValStr)
 				} else {
-					barColor = homeColor
+					homeStyled = homeTieStyle.Render(homeValStr)
+					awayStyled = awayTieStyle.Render(awayValStr)
 				}
-			} else if _, aOK := parseFloatVal(stat.Away); aOK {
-				barColor = awayColor
+			} else if hOK {
+				homeStyled = homeWinStyle.Render(homeValStr)
+				awayStyled = dimStyle.Width(valW).Align(lipgloss.Left).Render(awayValStr)
+			} else if aOK {
+				homeStyled = dimStyle.Width(valW).Align(lipgloss.Right).Render(homeValStr)
+				awayStyled = awayWinStyle.Render(awayValStr)
+			} else {
+				homeStyled = dimStyle.Width(valW).Align(lipgloss.Right).Render(homeValStr)
+				awayStyled = dimStyle.Width(valW).Align(lipgloss.Left).Render(awayValStr)
 			}
+
+			bar := statBarSplit(hv, av, hOK, aOK, halfW, homeColor, awayColor)
+
 			row := lipgloss.JoinHorizontal(lipgloss.Top,
-				homeNumStyle.Render(homeVal),
-				lipgloss.NewStyle().Width(barW).Align(lipgloss.Center).Foreground(barColor).Render(bar),
-				awayNumStyle.Render(awayVal),
+				labelStyle.Render(stat.Label),
+				" ",
+				homeStyled,
+				" ",
+				bar,
+				" ",
+				awayStyled,
 			)
 			lines = append(lines, row)
 		}
 		lines = append(lines, "")
 	}
 
-	body := lipgloss.JoinVertical(lipgloss.Top, lines...)
+	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	centered := lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Render(body)
 	return md.applyScroll(centered, width, height)
 }
@@ -665,6 +722,7 @@ func (md MatchDetail) symbolLegend() []string {
 		{"HT", "Descanso"}, {"FT", "Final"}, {"KO", "Inicio"},
 		{"S2", "2do tiempo"}, {"H2O", "Hidratación"}, {"LES", "Lesión"},
 		{"PAU", "Pausa"}, {"CONT", "Continúa"},
+		{"AET", "Tiempo extra"}, {"PEN", "Penales"},
 	}
 	var out []string
 	for _, l := range legend {
@@ -726,6 +784,12 @@ func (md MatchDetail) eventTypeCell(ev EventItem) string {
 		return mdTypeStyle.Render("PAU")
 	case "Continúa":
 		return mdTypeStyle.Render("CONT")
+	case "AET":
+		return mdTypeStyle.Render("AET")
+	case "AET_S2":
+		return mdTypeStyle.Render("AET")
+	case "Penales":
+		return mdTypeStyle.Render("PEN")
 	default:
 		short := ev.EventType
 		if len(short) > 5 {
@@ -835,10 +899,18 @@ func (md MatchDetail) eventDesc(ev EventItem) string {
 		parts = append(parts, "Pausa de hidratación")
 
 	case "VAR":
-		parts = append(parts, "Revisión VAR")
+		parts = append(parts, mdYellowStyle.Render("VAR"))
+		if ev.Detail != "" {
+			parts = append(parts, " — ")
+			parts = append(parts, ev.Detail)
+		}
 
 	case "VideoReview":
-		parts = append(parts, "Revisión de video")
+		parts = append(parts, mdYellowStyle.Render("VAR"))
+		if ev.Detail != "" {
+			parts = append(parts, " — ")
+			parts = append(parts, ev.Detail)
+		}
 
 	case "Shot":
 		switch ev.ShotDesc {
@@ -889,16 +961,12 @@ func (md MatchDetail) eventDesc(ev EventItem) string {
 
 	case "Continúa":
 		parts = append(parts, mdGoalStyle.Render("▶"))
-		parts = append(parts, " ")
-		if ev.Detail != "" {
-			parts = append(parts, ev.Detail)
-		} else {
-			parts = append(parts, "Se reanuda")
-		}
 
 	default:
 		if ev.Player != "" {
 			parts = append(parts, ev.Player)
+		} else if ev.Detail != "" {
+			parts = append(parts, ev.Detail)
 		}
 	}
 
@@ -913,39 +981,46 @@ func (md *MatchDetail) renderH2H(width, height int) string {
 	h2h := md.Details.H2H
 	var lines []string
 
-	// Header
-	headerW := width
-	if headerW < 30 {
-		headerW = 30
+	// ── Header: wins / draws / wins ──
+	availW := width - 4
+	if availW < 30 {
+		availW = 30
 	}
 	green := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render
 	drawLabel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")).Render
-	colW := (headerW - 12) / 2
+	colW := (availW - 10) / 2
 	if colW < 8 {
 		colW = 8
 	}
 	homeLabel := lipgloss.NewStyle().Width(colW).Align(lipgloss.Right).Bold(true).Foreground(lipgloss.Color("255")).Render(md.HomeName)
 	awayLabel := lipgloss.NewStyle().Width(colW).Align(lipgloss.Left).Bold(true).Foreground(lipgloss.Color("255")).Render(md.AwayName)
-	lines = append(lines, fmt.Sprintf("  %s    %s    %s",
+	lines = append(lines, fmt.Sprintf("  %s   %s   %s",
 		homeLabel, drawLabel("EMPATES"), awayLabel))
 	homeVal := lipgloss.NewStyle().Width(colW).Align(lipgloss.Right).Render(fmt.Sprintf("%d", h2h.HomeWins))
 	drawVal := lipgloss.NewStyle().Width(8).Align(lipgloss.Center).Render(fmt.Sprintf("%d", h2h.Draws))
 	awayVal := lipgloss.NewStyle().Width(colW).Align(lipgloss.Left).Render(fmt.Sprintf("%d", h2h.AwayWins))
-	lines = append(lines, fmt.Sprintf("  %s    %s    %s", green(homeVal), drawVal, awayVal))
+	lines = append(lines, fmt.Sprintf("  %s   %s   %s", green(homeVal), drawVal, awayVal))
 	lines = append(lines, "")
 
-	// Historical matches
+	// ── Enfrentamientos directos ──
 	if len(h2h.Matches) > 0 {
 		lines = append(lines, mdSectionHeader.Render("ENFRENTAMIENTOS DIRECTOS"))
-		scoreCol := 7
-		dateW := 12
-		teamW := (width - dateW - scoreCol - 4) / 2
+
+		dateW := 11
+		scoreW := 7
+		teamW := 14
 		if teamW < 6 {
 			teamW = 6
 		}
+		compW := availW - dateW - scoreW - teamW*2 - 6
+		if compW < 14 {
+			compW = 14
+		}
+
 		winnerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render
 		loserStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render
 		drawStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render
+
 		for _, m := range h2h.Matches {
 			score := m.Score
 			parts := strings.SplitN(m.Score, " : ", 2)
@@ -953,46 +1028,57 @@ func (md *MatchDetail) renderH2H(width, height int) string {
 				hs, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
 				as, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
 				if hs > as {
-					score = winnerStyle(m.Score)
+					score = winnerStyle(fmt.Sprintf("%-*s", scoreW, m.Score))
 				} else if as > hs {
-					score = loserStyle(m.Score)
+					score = loserStyle(fmt.Sprintf("%-*s", scoreW, m.Score))
 				} else {
-					score = drawStyle(m.Score)
+					score = drawStyle(fmt.Sprintf("%-*s", scoreW, m.Score))
 				}
+			} else {
+				score = fmt.Sprintf("%-*s", scoreW, m.Score)
 			}
-			hTeam := fmt.Sprintf("%-*s", teamW, m.HomeTeam)
-			aTeam := fmt.Sprintf("%-*s", teamW, m.AwayTeam)
-			matchLine := fmt.Sprintf("  %s  %s  %s  %s  %s",
-				m.Date, hTeam, score, aTeam, m.Competition)
-			lines = append(lines, mdPlayerStyle.Render(matchLine))
+			dateStr := fmt.Sprintf("%-*s", dateW, m.Date)
+			hTeam := fmt.Sprintf("%*s", teamW, truncate(m.HomeTeam, teamW))
+			aTeam := fmt.Sprintf("%-*s", teamW, truncate(m.AwayTeam, teamW))
+			comp := truncate(m.Competition, compW)
+			matchLine := fmt.Sprintf("%s  %s  %s  %s  %s",
+				dateStr, hTeam, score, aTeam, comp)
+			lines = append(lines, matchLine)
 		}
 		lines = append(lines, "")
 	}
 
-	// Recent form
+	// ── Últimos partidos (form) ──
 	if len(h2h.HomeForm) > 0 || len(h2h.AwayForm) > 0 {
-		lines = append(lines, mdSectionHeader.Render("ULTIMOS PARTIDOS"))
-		formW := width - 4
-		halfW := (formW - 3) / 2
-		if halfW < 15 {
-			halfW = 15
+		lines = append(lines, mdSectionHeader.Render("ÚLTIMOS PARTIDOS"))
+
+		halfW := (availW - 3) / 2
+		if halfW < 20 {
+			halfW = 20
 		}
-		homeHdr := lipgloss.NewStyle().Width(halfW).Bold(true).Foreground(lipgloss.Color("255")).Render(md.HomeName)
-		awayHdr := lipgloss.NewStyle().Width(halfW).Bold(true).Foreground(lipgloss.Color("255")).Align(lipgloss.Right).Render(md.AwayName)
-		lines = append(lines, fmt.Sprintf("  %s   %s", homeHdr, awayHdr))
-		sep := strings.Repeat("─", width-2)
-		lines = append(lines, fmt.Sprintf("  %s", sep))
+		oppW := halfW - 14
+		if oppW < 8 {
+			oppW = 8
+		}
+		scoreW := 7
+		halfCol := lipgloss.NewStyle().Width(halfW)
+
+		homeHdr := lipgloss.NewStyle().Width(halfW).Align(lipgloss.Center).Bold(true).Foreground(lipgloss.Color("255")).Render(md.HomeName)
+		awayHdr := lipgloss.NewStyle().Width(halfW).Align(lipgloss.Center).Bold(true).Foreground(lipgloss.Color("255")).Render(md.AwayName)
+		lines = append(lines, fmt.Sprintf("%s │ %s", homeHdr, awayHdr))
+		lines = append(lines, fmt.Sprintf("%s┼%s", strings.Repeat("─", halfW+1), strings.Repeat("─", halfW+1)))
+
+		resGreen := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render
+		resYellow := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")).Render
+		resRed := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")).Render
 
 		maxRows := len(h2h.HomeForm)
 		if len(h2h.AwayForm) > maxRows {
 			maxRows = len(h2h.AwayForm)
 		}
-		resGreen := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render
-		resYellow := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")).Render
-		resRed := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")).Render
 
 		for i := 0; i < maxRows; i++ {
-			left := ""
+			left := strings.Repeat(" ", halfW)
 			if i < len(h2h.HomeForm) {
 				fe := h2h.HomeForm[i]
 				res := fe.Result
@@ -1004,11 +1090,11 @@ func (md *MatchDetail) renderH2H(width, height int) string {
 				case "L":
 					res = resRed("L")
 				}
-				left = fmt.Sprintf("%-*s", halfW, fmt.Sprintf("%s  %s  %s", fe.Opponent, fe.Score, res))
-			} else {
-				left = strings.Repeat(" ", halfW)
+				opp := fmt.Sprintf("%-*s", oppW, truncate(fe.Opponent, oppW))
+				sc := fmt.Sprintf("%-*s", scoreW, fe.Score)
+				left = halfCol.Render(fmt.Sprintf("%s  %s  %s", opp, sc, res))
 			}
-			right := ""
+			right := strings.Repeat(" ", halfW)
 			if i < len(h2h.AwayForm) {
 				fe := h2h.AwayForm[i]
 				res := fe.Result
@@ -1020,16 +1106,29 @@ func (md *MatchDetail) renderH2H(width, height int) string {
 				case "L":
 					res = resRed("L")
 				}
-				right = fmt.Sprintf("%*s", halfW, fmt.Sprintf("%s  %s  %s", fe.Opponent, fe.Score, res))
-			} else {
-				right = strings.Repeat(" ", halfW)
+				opp := fmt.Sprintf("%-*s", oppW, truncate(fe.Opponent, oppW))
+				sc := fmt.Sprintf("%-*s", scoreW, fe.Score)
+				right = halfCol.Render(fmt.Sprintf("%s  %s  %s", opp, sc, res))
 			}
-			lines = append(lines, fmt.Sprintf("  %s   %s", left, right))
+			lines = append(lines, fmt.Sprintf("%s │ %s", left, right))
 		}
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Top, lines...)
 	return md.applyScroll(body, width, height)
+}
+
+func truncate(s string, maxW int) string {
+	if maxW <= 0 {
+		return ""
+	}
+	if len(s) <= maxW {
+		return s
+	}
+	if maxW <= 1 {
+		return "…"
+	}
+	return s[:maxW-1] + "…"
 }
 
 func (md *MatchDetail) renderInjuries(width, height int) string {
@@ -1137,4 +1236,40 @@ func (md *MatchDetail) applyScroll(body string, width, height int) string {
 	}
 
 	return result + ScrollIndicator
+}
+
+func formatPenShots(shots []domain.PenShot) string {
+	if len(shots) == 0 {
+		return ""
+	}
+	const maxRounds = 5
+	homeChars := make([]bool, 0, maxRounds)
+	awayChars := make([]bool, 0, maxRounds)
+	for _, s := range shots {
+		if s.Team == domain.SideHome {
+			homeChars = append(homeChars, s.Scored)
+		} else {
+			awayChars = append(awayChars, s.Scored)
+		}
+	}
+	homeStr := formatPenSide(homeChars, maxRounds)
+	awayStr := formatPenSide(awayChars, maxRounds)
+	return fmt.Sprintf("%s : %s", homeStr, awayStr)
+}
+
+func formatPenSide(results []bool, maxRounds int) string {
+	var sb strings.Builder
+	for _, scored := range results {
+		if scored {
+			sb.WriteString("✓ ")
+		} else {
+			sb.WriteString("X ")
+		}
+	}
+	if len(results) < maxRounds {
+		for i := 0; i < maxRounds-len(results); i++ {
+			sb.WriteString("〇 ")
+		}
+	}
+	return strings.TrimRight(sb.String(), " ")
 }

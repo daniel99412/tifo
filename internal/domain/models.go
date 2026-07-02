@@ -64,13 +64,14 @@ type PlayerRef struct {
 
 // MatchStatus describes the current state of a match.
 type MatchStatus struct {
-	State     MatchState
-	Detail    string // e.g. "Half Time", "Full Time", "66'"
-	Period    int
-	Clock     string
-	ScoreStr  string // e.g. "2-1"
-	UTCTime   string // raw UTC string from provider
-	Kickoff   time.Time
+	State              MatchState
+	Detail             string // e.g. "Half Time", "Full Time", "67'"
+	Period             int
+	Clock              string
+	ScoreStr           string // e.g. "2-1"
+	UTCTime            string // raw UTC string from provider
+	Kickoff            time.Time
+	FirstHalfAddedTime int    // stoppage time added in 1st half (from events), 0 = unknown
 }
 
 // MatchState enumerates possible match states.
@@ -95,7 +96,17 @@ type Match struct {
 	Away         TeamRef
 	HomeScore    *int
 	AwayScore    *int
+	HomePenScore *int
+	AwayPenScore *int
+	PenShootout  []PenShot
 	Status       MatchStatus
+}
+
+// PenShot represents a single penalty kick attempt in a shootout.
+type PenShot struct {
+	Team   TeamSide
+	Player string
+	Scored bool
 }
 
 // MatchDetails contains all in-depth match data.
@@ -116,21 +127,24 @@ type MatchDetails struct {
 
 // MatchRef is a lightweight match reference.
 type MatchRef struct {
-	TIFOID TIFOID
-	Home   string
-	Away   string
-	Score  string
+	TIFOID      TIFOID
+	Home        string
+	Away        string
+	Score       string
+	PenScore    string
+	PenShootout []PenShot
+	LiveMinute  int // authoritative match minute from provider (0 = unknown)
 }
 
 // MatchExtraInfo holds supplemental info from enrichment.
 type MatchExtraInfo struct {
-	Venue      string
-	Attendance int
-	Referee    string
-	Weather    string
-	Broadcasts []string
-	HomeColor  string
-	AwayColor  string
+	Venue        string
+	Attendance   int
+	Referee      string
+	Weather      string
+	Broadcasts   []string
+	HomeColor    string
+	AwayColor    string
 }
 
 // Lineups contains formations, starters, subs, and coaches.
@@ -194,6 +208,19 @@ const (
 	EvPausa        EventType = "Pausa"
 	EvContinua     EventType = "Continúa"
 	EvFT           EventType = "FT"
+	EvAETStart     EventType = "AET"
+	EvAETS2        EventType = "AET_S2"
+	EvPenShootout  EventType = "Penales"
+)
+
+// MatchPeriod constants for MatchStatus.Period.
+const (
+	PeriodUnknown      = 0
+	PeriodFirstHalf    = 1
+	PeriodSecondHalf   = 2
+	PeriodETFirstHalf  = 3
+	PeriodETSecondHalf = 4
+	PeriodPenalties    = 5
 )
 
 // TeamSide distinguishes home/away/neutral.
