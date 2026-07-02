@@ -312,45 +312,61 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 		}
 	}
 	if data.Summary.Boxscore.Form != nil {
-		entries, ok := data.Summary.Boxscore.Form.([]interface{})
-		if ok {
-			for _, entry := range entries {
-				em, ok := entry.(map[string]interface{})
-				if !ok {
-					continue
+		log.Printf("[espn] Boxscore.Form type=%T", data.Summary.Boxscore.Form)
+		var entries []interface{}
+		switch v := data.Summary.Boxscore.Form.(type) {
+		case []interface{}:
+			entries = v
+		case map[string]interface{}:
+			entries = []interface{}{v}
+		default:
+			log.Printf("[espn] Boxscore.Form tipo inesperado %T, omitiendo", data.Summary.Boxscore.Form)
+		}
+		for _, entry := range entries {
+			em, ok := entry.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			teamRaw, _ := em["team"].(map[string]interface{})
+			teamName, _ := teamRaw["displayName"].(string)
+			if teamName == "" {
+				continue
+			}
+			var formEvents []domain.H2HFormEvent
+			eventsRaw, _ := em["events"].([]interface{})
+			for _, evRaw := range eventsRaw {
+				ev, _ := evRaw.(map[string]interface{})
+				res, _ := ev["gameResult"].(string)
+				score, _ := ev["score"].(string)
+				oppRaw, _ := ev["opponent"].(map[string]interface{})
+				oppName, _ := oppRaw["displayName"].(string)
+				if res != "" {
+					formEvents = append(formEvents, domain.H2HFormEvent{
+						Opponent: oppName,
+						Score:    score,
+						Result:   res,
+					})
 				}
-				teamRaw, _ := em["team"].(map[string]interface{})
-				teamName, _ := teamRaw["displayName"].(string)
-				if teamName == "" {
-					continue
-				}
-				var formEvents []domain.H2HFormEvent
-				eventsRaw, _ := em["events"].([]interface{})
-				for _, evRaw := range eventsRaw {
-					ev, _ := evRaw.(map[string]interface{})
-					res, _ := ev["gameResult"].(string)
-					score, _ := ev["score"].(string)
-					oppRaw, _ := ev["opponent"].(map[string]interface{})
-					oppName, _ := oppRaw["displayName"].(string)
-					if res != "" {
-						formEvents = append(formEvents, domain.H2HFormEvent{
-							Opponent: oppName,
-							Score:    score,
-							Result:   res,
-						})
-					}
-				}
-				if len(formEvents) > 0 {
-					if teamName == homeTeam || strings.Contains(homeTeam, teamName) || strings.Contains(teamName, homeTeam) {
-						out.H2H.HomeForm = formEvents
-					} else if teamName == awayTeam || strings.Contains(awayTeam, teamName) || strings.Contains(teamName, awayTeam) {
-						out.H2H.AwayForm = formEvents
-					}
+			}
+			if len(formEvents) > 0 {
+				if teamName == homeTeam || strings.Contains(homeTeam, teamName) || strings.Contains(teamName, homeTeam) {
+					out.H2H.HomeForm = formEvents
+				} else if teamName == awayTeam || strings.Contains(awayTeam, teamName) || strings.Contains(teamName, awayTeam) {
+					out.H2H.AwayForm = formEvents
 				}
 			}
 		}
+	} else {
+		log.Printf("[espn] Boxscore.Form es nil")
 	}
-	// H2H historical matches from ESPN headToHeadGames
+	log.Printf("[espn] HeadToHeadGames count=%d", len(data.Summary.HeadToHeadGames))
+	// H2H historical matches from ESPN headToHeadGames.
+	// Deduplicate against existing FotMob matches by date + teams.
+	existing := make(map[string]bool)
+	for _, m := range out.H2H.Matches {
+		key := h2hMatchKey(m)
+		existing[key] = true
+	}
 	uniq := make(map[string]bool)
 	for _, teamEntry := range data.Summary.HeadToHeadGames {
 		for _, ev := range teamEntry.Events {
@@ -371,18 +387,52 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 			if ev.AtVs == "@" {
 				homeName, awayName = awayName, homeName
 			}
-			out.H2H.Matches = append(out.H2H.Matches, domain.H2HMatchDetail{
+			candidate := domain.H2HMatchDetail{
 				Date:        date,
 				HomeTeam:    homeName,
 				AwayTeam:    awayName,
 				HomeScore:   hs,
 				AwayScore:   as,
 				Competition: ev.CompetitionName,
-			})
+			}
+			if existing[h2hMatchKey(candidate)] {
+				continue
+			}
+			out.H2H.Matches = append(out.H2H.Matches, candidate)
 		}
 	}
 
+	// Recompute H2H summary from actual matches using current match orientation.
+		if len(out.H2H.Matches) > 0 {
+		hw, d, aw := 0, 0, 0
+		for _, m := range out.H2H.Matches {
+			switch {
+			case m.HomeScore > m.AwayScore:
+				if teamMatch(m.HomeTeam, homeTeam) {
+					hw++
+				} else if teamMatch(m.HomeTeam, awayTeam) {
+					aw++
+				}
+			case m.HomeScore < m.AwayScore:
+				if teamMatch(m.AwayTeam, awayTeam) {
+					aw++
+				} else if teamMatch(m.AwayTeam, homeTeam) {
+					hw++
+				}
+			default:
+				d++
+			}
+		}
+		out.H2H.HomeWins = hw
+		out.H2H.Draws = d
+		out.H2H.AwayWins = aw
+	}
+
 	return &out
+}
+
+func teamMatch(a, b string) bool {
+	return strings.EqualFold(a, b) || strings.Contains(strings.ToLower(a), strings.ToLower(b)) || strings.Contains(strings.ToLower(b), strings.ToLower(a))
 }
 
 func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.MatchEvent, homeTeam, awayTeam string) []domain.MatchEvent {
@@ -602,4 +652,12 @@ func containsStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func h2hMatchKey(m domain.H2HMatchDetail) string {
+	dateStr := ""
+	if !m.Date.IsZero() {
+		dateStr = m.Date.Format("2006-01-02")
+	}
+	return dateStr + "|" + strings.ToLower(m.HomeTeam) + "|" + strings.ToLower(m.AwayTeam)
 }

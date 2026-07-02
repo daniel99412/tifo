@@ -122,6 +122,15 @@ func (c *Client) GetTeam(teamID int) (map[string]any, error) {
 	return resp, err
 }
 
+func (c *Client) GetTeamData(teamID int) (*TeamDataResponse, error) {
+	var resp TeamDataResponse
+	err := c.get("/teams", url.Values{"id": {fmt.Sprint(teamID)}}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) GetPlayer(playerID int) (PlayerDataResponse, error) {
 	var resp PlayerDataResponse
 	err := c.get("/playerData", url.Values{"id": {fmt.Sprint(playerID)}}, &resp)

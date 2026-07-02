@@ -100,9 +100,8 @@ func (md *MatchDetail) renderH2H(width, height int) string {
 		lines = append(lines, fmt.Sprintf("%s │ %s", homeHdr, awayHdr))
 		lines = append(lines, fmt.Sprintf("%s┼%s", strings.Repeat("─", halfW+1), strings.Repeat("─", halfW+1)))
 
-		resGreen := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render
-		resYellow := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")).Render
-		resRed := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")).Render
+		winStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
+		lossStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 
 		maxRows := len(h2h.HomeForm)
 		if len(h2h.AwayForm) > maxRows {
@@ -113,34 +112,30 @@ func (md *MatchDetail) renderH2H(width, height int) string {
 			left := strings.Repeat(" ", halfW)
 			if i < len(h2h.HomeForm) {
 				fe := h2h.HomeForm[i]
-				res := fe.Result
-				switch res {
+				var rowStyle lipgloss.Style
+				switch fe.Result {
 				case "W":
-					res = resGreen("W")
-				case "D":
-					res = resYellow("D")
+					rowStyle = winStyle
 				case "L":
-					res = resRed("L")
+					rowStyle = lossStyle
 				}
-				opp := fmt.Sprintf("%-*s", oppW, truncate(fe.Opponent, oppW))
-				sc := fmt.Sprintf("%-*s", scoreW, fe.Score)
-				left = halfCol.Render(fmt.Sprintf("%s  %s  %s", opp, sc, res))
+				opp := rowStyle.Render(fmt.Sprintf("%-*s", oppW, truncate(fe.Opponent, oppW)))
+				sc := rowStyle.Render(fmt.Sprintf("%-*s", scoreW, fe.Score))
+				left = halfCol.Render(fmt.Sprintf("%s  %s", opp, sc))
 			}
 			right := strings.Repeat(" ", halfW)
 			if i < len(h2h.AwayForm) {
 				fe := h2h.AwayForm[i]
-				res := fe.Result
-				switch res {
+				var rowStyle lipgloss.Style
+				switch fe.Result {
 				case "W":
-					res = resGreen("W")
-				case "D":
-					res = resYellow("D")
+					rowStyle = winStyle
 				case "L":
-					res = resRed("L")
+					rowStyle = lossStyle
 				}
-				opp := fmt.Sprintf("%-*s", oppW, truncate(fe.Opponent, oppW))
-				sc := fmt.Sprintf("%-*s", scoreW, fe.Score)
-				right = halfCol.Render(fmt.Sprintf("%s  %s  %s", opp, sc, res))
+				opp := rowStyle.Render(fmt.Sprintf("%-*s", oppW, truncate(fe.Opponent, oppW)))
+				sc := rowStyle.Render(fmt.Sprintf("%-*s", scoreW, fe.Score))
+				right = halfCol.Render(fmt.Sprintf("%s  %s", opp, sc))
 			}
 			lines = append(lines, fmt.Sprintf("%s │ %s", left, right))
 		}

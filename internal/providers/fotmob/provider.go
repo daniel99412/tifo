@@ -197,6 +197,20 @@ func (p *Provider) mapMatchDetails(d *oldFotmob.MatchDetailsResponse) (*domain.M
 	// H2H
 	md.H2H = p.mapH2H(d)
 
+	// Team form from content.matchFacts.teamForm (available for all matches).
+	homeForm, awayForm := p.mapTeamForm(d)
+	if homeForm != nil || awayForm != nil {
+		if md.H2H == nil {
+			md.H2H = &domain.H2H{}
+		}
+		if len(homeForm) > 0 {
+			md.H2H.HomeForm = homeForm
+		}
+		if len(awayForm) > 0 {
+			md.H2H.AwayForm = awayForm
+		}
+	}
+
 	// Injuries
 	md.Injuries = p.mapInjuries(d)
 
@@ -622,6 +636,62 @@ func teamIDMatch(id interface{}, teamID int) bool {
 		return err == nil && n == teamID
 	}
 	return false
+}
+
+// mapTeamForm extracts last-5-results form for both teams from content.matchFacts.teamForm.
+func (p *Provider) mapTeamForm(d *oldFotmob.MatchDetailsResponse) (homeForm, awayForm []domain.H2HFormEvent) {
+	entries := d.Content.MatchFacts.TeamForm
+	if len(entries) < 2 {
+		return nil, nil
+	}
+	for _, teamEntries := range entries {
+		if len(teamEntries) == 0 {
+			continue
+		}
+		// Sort by date descending so most recent is at top.
+		sort.Slice(teamEntries, func(i, j int) bool {
+			return teamEntries[i].Date.UTCTime > teamEntries[j].Date.UTCTime
+		})
+
+		first := teamEntries[0]
+
+		// Determine team name from whichever side has isOurTeam=true.
+		teamName := ""
+		switch {
+		case first.Home.IsOurTeam:
+			teamName = first.Home.Name
+		case first.Away.IsOurTeam:
+			teamName = first.Away.Name
+		}
+		if teamName == "" {
+			log.Printf("[fotmob] teamForm: no side marked isOurTeam, saltando")
+			continue
+		}
+
+		var form []domain.H2HFormEvent
+		for _, fe := range teamEntries {
+			opp := fe.Away.Name
+			if fe.Away.IsOurTeam {
+				opp = fe.Home.Name
+			}
+			form = append(form, domain.H2HFormEvent{
+				Opponent: opp,
+				Score:    fe.Score,
+				Result:   fe.ResultString,
+			})
+		}
+
+		switch {
+		case strings.EqualFold(teamName, d.General.HomeTeam.Name):
+			homeForm = form
+		case strings.EqualFold(teamName, d.General.AwayTeam.Name):
+			awayForm = form
+		default:
+			log.Printf("[fotmob] teamForm: %q no coincide con home %q ni away %q",
+				teamName, d.General.HomeTeam.Name, d.General.AwayTeam.Name)
+		}
+	}
+	return
 }
 
 

@@ -88,3 +88,7 @@ func (s *Service) SearchTeams(term string) ([]SearchResult, error) {
 	return resp.Data, nil
 }
 
+func (s *Service) TeamData(teamID int) (*TeamDataResponse, error) {
+	return s.client.GetTeamData(teamID)
+}
+

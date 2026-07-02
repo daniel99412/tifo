@@ -147,6 +147,7 @@ type MatchDetailsContent struct {
 			Events     []MatchEvent `json:"events"`
 			EventTypes []string     `json:"eventTypes"`
 		} `json:"events"`
+		TeamForm [][]TeamFormEntry `json:"teamForm"`
 	} `json:"matchFacts"`
 	Stats struct {
 		Periods Periods `json:"Periods"`
@@ -158,11 +159,7 @@ type MatchDetailsContent struct {
 	H2H H2HWrapper `json:"h2h"`
 	PlayerStats map[string]PlayerStat `json:"playerStats"`
 	Shotmap ShotmapData `json:"shotmap"`
-	Momentum struct {
-		Main struct {
-			Data []MomentumPoint `json:"data"`
-		} `json:"main"`
-	} `json:"momentum"`
+	Momentum MomentumWrapper `json:"momentum"`
 }
 
 type MatchEvent struct {
@@ -229,6 +226,25 @@ type MomentumPoint struct {
 	Value  int     `json:"value"`
 }
 
+// MomentumData is the actual structure of the momentum field.
+type MomentumData struct {
+	Main struct {
+		Data []MomentumPoint `json:"data"`
+	} `json:"main"`
+}
+
+// MomentumWrapper handles the case where the API returns false instead of data.
+type MomentumWrapper struct {
+	MomentumData
+}
+
+func (m *MomentumWrapper) UnmarshalJSON(data []byte) error {
+	if string(data) == "false" {
+		return nil
+	}
+	return json.Unmarshal(data, &m.MomentumData)
+}
+
 type LineupTeam struct {
 	ID        int            `json:"id"`
 	Name      string         `json:"name"`
@@ -287,6 +303,32 @@ type PlayerStat struct {
 	Rating struct {
 		Num string `json:"num"`
 	} `json:"rating"`
+}
+
+// TeamFormEntry is a single fixture in a team's recent form list (content.matchFacts.teamForm).
+type TeamFormEntry struct {
+	Result       int    `json:"result"`
+	ResultString string `json:"resultString"`
+	Score        string `json:"score"`
+	Date         struct {
+		UTCTime string `json:"utcTime"`
+	} `json:"date"`
+	Home struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		IsOurTeam bool   `json:"isOurTeam"`
+	} `json:"home"`
+	Away struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		IsOurTeam bool   `json:"isOurTeam"`
+	} `json:"away"`
+	TooltipText struct {
+		HomeTeam  string `json:"homeTeam"`
+		AwayTeam  string `json:"awayTeam"`
+		HomeScore string `json:"homeScore"`
+		AwayScore string `json:"awayScore"`
+	} `json:"tooltipText"`
 }
 
 type GoalEvent struct {
@@ -444,4 +486,36 @@ type LeagueInfo struct {
 	Name   string
 	CCode  string
 	Region string
+}
+
+// TeamDataResponse is a subset of the FotMob team API response with recent matches.
+type TeamDataResponse struct {
+	ID            int                `json:"id"`
+	Name          string             `json:"name"`
+	RecentMatches []TeamRecentMatch  `json:"recentMatches"`
+}
+
+// TeamRecentMatch is a single match in a team's recent fixture list.
+type TeamRecentMatch struct {
+	Home   TeamMatchSide  `json:"home"`
+	Away   TeamMatchSide  `json:"away"`
+	Status TeamMatchStatus `json:"status"`
+	League struct {
+		Name string `json:"name"`
+	} `json:"league"`
+}
+
+// TeamMatchSide holds a team's representation in a recent match.
+type TeamMatchSide struct {
+	Name  string      `json:"name"`
+	Score *int        `json:"score"`
+	ID    interface{} `json:"id"`
+}
+
+// TeamMatchStatus holds the bare status fields we need from recent matches.
+type TeamMatchStatus struct {
+	ScoreStr string `json:"scoreStr"`
+	UTCTime  string `json:"utcTime"`
+	Finished bool   `json:"finished"`
+	Started  bool   `json:"started"`
 }
