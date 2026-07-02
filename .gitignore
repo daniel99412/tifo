@@ -35,3 +35,4 @@ go.work.sum
 .vscode/
 tmp/
 tifo_mappings.db
+*.png
