@@ -1109,7 +1109,7 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 	}
 
 	// Sort events
-	sort.Slice(data.Events.Items, func(i, j int) bool {
+	sort.SliceStable(data.Events.Items, func(i, j int) bool {
 		ti, tj := data.Events.Items[i].SortTime, data.Events.Items[j].SortTime
 		if ti == tj {
 			return data.Events.Items[i].SortOverload < data.Events.Items[j].SortOverload
