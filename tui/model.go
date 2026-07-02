@@ -1205,21 +1205,7 @@ func isMatchLive(m domain.Match) bool {
 	if isMatchFinished(m, nil) {
 		return false
 	}
-	switch m.Status.State {
-	case domain.MatchLive:
-		return true
-	case domain.MatchScheduled:
-		if m.HomeScore != nil && m.AwayScore != nil {
-			return true
-		}
-		if !m.Status.Kickoff.IsZero() {
-			elapsed := time.Since(m.Status.Kickoff)
-			if elapsed > 0 && elapsed < 150*time.Minute {
-				return true
-			}
-		}
-	}
-	return false
+	return m.Status.State == domain.MatchLive
 }
 
 func computeMatchMinute(ko time.Time, added int) string {
