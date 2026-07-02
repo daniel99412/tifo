@@ -148,13 +148,15 @@ type MatchRef struct {
 
 // MatchExtraInfo holds supplemental info from enrichment.
 type MatchExtraInfo struct {
-	Venue        string
-	Attendance   int
-	Referee      string
-	Weather      string
-	Broadcasts   []string
-	HomeColor    string
-	AwayColor    string
+	Venue         string
+	VenueCapacity int
+	Surface       string
+	Attendance    int
+	Referee       string
+	Weather       string
+	Broadcasts    []string
+	HomeColor     string
+	AwayColor     string
 }
 
 // Lineups contains formations, starters, subs, and coaches.

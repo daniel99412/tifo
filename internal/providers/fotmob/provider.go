@@ -161,6 +161,33 @@ func (p *Provider) mapMatchDetails(d *oldFotmob.MatchDetailsResponse) (*domain.M
 		},
 	}
 
+	// Info box (stadium, referee, attendance)
+	ib := d.Content.MatchFacts.InfoBox
+	if ib.Stadium != nil {
+		venue := ib.Stadium.Name
+		if ib.Stadium.City != "" {
+			venue += ", " + ib.Stadium.City
+		}
+		md.ExtraInfo.Venue = venue
+		md.ExtraInfo.VenueCapacity = ib.Stadium.Capacity
+		md.ExtraInfo.Surface = ib.Stadium.Surface
+	}
+	if ib.Referee != nil {
+		md.ExtraInfo.Referee = ib.Referee.Text
+	}
+	if ib.Attendance != nil {
+		md.ExtraInfo.Attendance = *ib.Attendance
+	}
+
+	// Weather from content.weather
+	if w := d.Content.Weather; w.Description != "" {
+		weather := w.Description
+		if w.Temperature > 0 {
+			weather = fmt.Sprintf("%s, %d°C", weather, w.Temperature)
+		}
+		md.ExtraInfo.Weather = weather
+	}
+
 	if len(d.Header.Teams) >= 2 {
 		md.Match.Score = fmt.Sprintf("%d-%d", d.Header.Teams[0].Score, d.Header.Teams[1].Score)
 	}

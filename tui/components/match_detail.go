@@ -149,16 +149,18 @@ type EventData struct {
 }
 
 type MatchExtraInfo struct {
-	Venue        string
-	Attendance   int
-	Referee      string
-	Weather      string
-	Broadcasts   []string
-	ESPNStatus   string
-	HomeColor    string
-	AwayColor    string
-	HomeAltColor string
-	AwayAltColor string
+	Venue         string
+	VenueCapacity int
+	Surface       string
+	Attendance    int
+	Referee       string
+	Weather       string
+	Broadcasts    []string
+	ESPNStatus    string
+	HomeColor     string
+	AwayColor     string
+	HomeAltColor  string
+	AwayAltColor  string
 }
 
 type EventItem struct {
@@ -413,13 +415,23 @@ func (md *MatchDetail) Render(width, height int) string {
 			lines = append(lines, mdInfoStyle.Render(info.ESPNStatus))
 		}
 		if info.Venue != "" {
-			lines = append(lines, mdInfoStyle.Render(fmt.Sprintf("Venue: %s", info.Venue)))
+			venueLine := info.Venue
+			if info.VenueCapacity > 0 {
+				venueLine = fmt.Sprintf("%s — Cap. %d", venueLine, info.VenueCapacity)
+			}
+			if info.Surface != "" && info.Surface != "grass" {
+				venueLine = fmt.Sprintf("%s · %s", venueLine, info.Surface)
+			}
+			lines = append(lines, mdInfoStyle.Render(venueLine))
 		}
 		if info.Attendance > 0 {
 			lines = append(lines, mdInfoStyle.Render(fmt.Sprintf("Asistencia: %d", info.Attendance)))
 		}
 		if info.Referee != "" {
 			lines = append(lines, mdInfoStyle.Render(fmt.Sprintf("Árbitro: %s", info.Referee)))
+		}
+		if info.Weather != "" {
+			lines = append(lines, mdInfoStyle.Render(fmt.Sprintf("Clima: %s", info.Weather)))
 		}
 		if len(info.Broadcasts) > 0 {
 			lines = append(lines, mdInfoStyle.Render(fmt.Sprintf("TV: %s", strings.Join(info.Broadcasts, ", "))))

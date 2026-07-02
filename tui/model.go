@@ -1154,13 +1154,15 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 
 	// Extra info
 	data.Events.ExtraInfo = &components.MatchExtraInfo{
-		Venue:      d.ExtraInfo.Venue,
-		Attendance: d.ExtraInfo.Attendance,
-		Referee:    d.ExtraInfo.Referee,
-		Weather:    d.ExtraInfo.Weather,
-		Broadcasts: d.ExtraInfo.Broadcasts,
-		HomeColor:  d.ExtraInfo.HomeColor,
-		AwayColor:  d.ExtraInfo.AwayColor,
+		Venue:         d.ExtraInfo.Venue,
+		VenueCapacity: d.ExtraInfo.VenueCapacity,
+		Surface:       d.ExtraInfo.Surface,
+		Attendance:    d.ExtraInfo.Attendance,
+		Referee:       d.ExtraInfo.Referee,
+		Weather:       d.ExtraInfo.Weather,
+		Broadcasts:    d.ExtraInfo.Broadcasts,
+		HomeColor:     d.ExtraInfo.HomeColor,
+		AwayColor:     d.ExtraInfo.AwayColor,
 	}
 
 	return data

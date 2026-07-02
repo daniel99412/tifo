@@ -194,6 +194,7 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 		} else if city != "" {
 			out.ExtraInfo.Venue = fmt.Sprintf("%s, %s", data.Summary.GameInfo.Venue.FullName, city)
 		}
+		out.ExtraInfo.VenueCapacity = data.Summary.GameInfo.Venue.Capacity
 	}
 
 	out.ExtraInfo.Attendance = data.Summary.GameInfo.Attendance

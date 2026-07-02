@@ -148,7 +148,9 @@ type MatchDetailsContent struct {
 			EventTypes []string     `json:"eventTypes"`
 		} `json:"events"`
 		TeamForm [][]TeamFormEntry `json:"teamForm"`
+		InfoBox  InfoBox           `json:"infoBox"`
 	} `json:"matchFacts"`
+	Weather WeatherInfo `json:"weather"`
 	Stats struct {
 		Periods Periods `json:"Periods"`
 	} `json:"stats"`
@@ -160,6 +162,54 @@ type MatchDetailsContent struct {
 	PlayerStats map[string]PlayerStat `json:"playerStats"`
 	Shotmap ShotmapData `json:"shotmap"`
 	Momentum MomentumWrapper `json:"momentum"`
+}
+
+type InfoBox struct {
+	MatchDate  *MatchDateInfo  `json:"Match Date"`
+	Tournament *TournamentInfo `json:"Tournament"`
+	Stadium    *StadiumInfo    `json:"Stadium"`
+	Referee    *RefereeInfo    `json:"Referee"`
+	Attendance *int            `json:"Attendance"`
+	LegInfo    interface{}     `json:"legInfo"`
+}
+
+type MatchDateInfo struct {
+	UTCTime       string `json:"utcTime"`
+	IsDateCorrect bool   `json:"isDateCorrect"`
+}
+
+type TournamentInfo struct {
+	ID             int    `json:"id"`
+	ParentLeagueID int    `json:"parentLeagueId"`
+	Link           string `json:"link"`
+	LeagueName     string `json:"leagueName"`
+	RoundName      string `json:"roundName"`
+	Round          string `json:"round"`
+}
+
+type StadiumInfo struct {
+	Name     string `json:"name"`
+	City     string `json:"city"`
+	Country  string `json:"country"`
+	Capacity int    `json:"capacity"`
+	Surface  string `json:"surface"`
+}
+
+type RefereeInfo struct {
+	ImgURL      string `json:"imgUrl"`
+	Text        string `json:"text"`
+	CountryCode string `json:"countryCode"`
+	Country     string `json:"country"`
+}
+
+type WeatherInfo struct {
+	Temperature           int    `json:"temperature"`
+	WindSpeed             int    `json:"windSpeed"`
+	WindDirectionCardinal string `json:"windDirectionCardinal"`
+	RelativeHumidity      int    `json:"relativeHumidity"`
+	Precipitation         int    `json:"precipitation"`
+	Description           string `json:"description"`
+	DefaultTitle          string `json:"defaultTitle"`
 }
 
 type MatchEvent struct {
