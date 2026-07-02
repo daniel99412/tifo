@@ -1111,10 +1111,21 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 	// Sort events
 	sort.SliceStable(data.Events.Items, func(i, j int) bool {
 		ti, tj := data.Events.Items[i].SortTime, data.Events.Items[j].SortTime
-		if ti == tj {
-			return data.Events.Items[i].SortOverload < data.Events.Items[j].SortOverload
+		if ti != tj {
+			return ti < tj
 		}
-		return ti < tj
+		si, sj := data.Events.Items[i].SortOverload, data.Events.Items[j].SortOverload
+		if si != sj {
+			return si < sj
+		}
+		// Mismo tiempo: SHO antes que GOL (el tiro precede al gol)
+		if data.Events.Items[i].EventType == "Goal" && data.Events.Items[j].EventType == "Shot" {
+			return false
+		}
+		if data.Events.Items[i].EventType == "Shot" && data.Events.Items[j].EventType == "Goal" {
+			return true
+		}
+		return false
 	})
 
 	// H2H
