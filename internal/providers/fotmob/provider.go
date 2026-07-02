@@ -129,7 +129,7 @@ func (p *Provider) mapMatch(m oldFotmob.LeagueMatch) (*domain.Match, error) {
 		HomeScore: homeScore,
 		AwayScore: awayScore,
 		Status: domain.MatchStatus{
-			State:    mapFotmobStatus(m.Status.Started, m.Status.Finished),
+			State:    mapFotmobStatus(m.Status.Started, m.Status.Finished, homeScore, awayScore, ko),
 			Detail:   func() string { if m.Status.Finished { return "Finalizado" }; if m.Status.Started { return "En vivo" }; return "" }(),
 			ScoreStr: m.Status.ScoreStr,
 			UTCTime:  m.Status.UTCTime,
@@ -641,11 +641,15 @@ func parseIntPtr(scoreStr string, home bool) *int {
 	return &n
 }
 
-func mapFotmobStatus(live, finished bool) domain.MatchState {
+func mapFotmobStatus(live, finished bool, homeScore, awayScore *int, ko time.Time) domain.MatchState {
 	switch {
 	case finished:
 		return domain.MatchFinished
 	case live:
+		return domain.MatchLive
+	case homeScore != nil && awayScore != nil:
+		return domain.MatchLive
+	case !ko.IsZero() && time.Since(ko) > 0 && time.Since(ko) < 150*time.Minute:
 		return domain.MatchLive
 	default:
 		return domain.MatchScheduled
