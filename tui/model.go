@@ -482,16 +482,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					log.Printf("[batch] updated m.matches[%d] with penalty data: homePen=%v awayPen=%v shootout=%d",
 						i, m.matches[i].HomePenScore, m.matches[i].AwayPenScore, len(m.matches[i].PenShootout))
 
-					// FirstHalfAddedTime from events
-					for _, ev := range msg.details.Events {
-						if ev.SortTime == 45 && ev.AddedTime > 0 {
-							m.matches[i].Status.FirstHalfAddedTime = ev.AddedTime
-							log.Printf("[clock] extracted FirstHalfAddedTime=%d for match %s", ev.AddedTime, detailFotmobID)
-							break
-						}
+				// FirstHalfAddedTime from events
+				for _, ev := range msg.details.Events {
+					if ev.SortTime == 45 && ev.AddedTime > 0 {
+						m.matches[i].Status.FirstHalfAddedTime = ev.AddedTime
+						log.Printf("[clock] extracted FirstHalfAddedTime=%d for match %s", ev.AddedTime, detailFotmobID)
+						break
 					}
+				}
 
-					// If overall selectedMatch ref is stale, re-point it.
+				// Update Status.Detail from live minute / events
+				detail := ""
+				for _, ev := range msg.details.Events {
+					if ev.EventType == domain.EvHalf && ev.HalfStr == "HT" {
+						detail = "HT"
+						break
+					}
+				}
+				if detail == "" {
+					if lm := msg.details.Match.LiveMinute; lm > 0 {
+						detail = fmt.Sprintf("%d'", lm)
+					}
+				}
+				if detail != "" {
+					m.matches[i].Status.Detail = detail
+					log.Printf("[batch] updated match %s detail=%q", detailFotmobID, detail)
+				}
+
+				// If overall selectedMatch ref is stale, re-point it.
 					if m.selectedMatch != nil {
 						if sid, ok := m.selectedMatch.ExternalIDs.Get("fotmob"); ok && sid == detailFotmobID {
 							m.selectedMatch = &m.matches[i]
