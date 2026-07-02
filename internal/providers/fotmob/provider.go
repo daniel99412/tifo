@@ -245,6 +245,9 @@ func (p *Provider) mapMatchDetails(d *oldFotmob.MatchDetailsResponse) (*domain.M
 	// Shotmap
 	md.ShotMap = p.mapShotmap(d)
 
+	// Player stats
+	md.PlayerStats = p.mapPlayerStats(d)
+
 	return md, nil
 }
 
@@ -296,6 +299,17 @@ func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEv
 			}
 		}
 	}
+	// Also scan shotmap — shots may have higher added time than content events
+	for _, s := range d.Content.Shotmap.Shots {
+		if s.MinAdded != nil && *s.MinAdded > 0 {
+			if s.Min == 45 && *s.MinAdded > maxAddedHT {
+				maxAddedHT = *s.MinAdded
+			}
+			if s.Min == 90 && *s.MinAdded > maxAddedFT {
+				maxAddedFT = *s.MinAdded
+			}
+		}
+	}
 
 	for _, ev := range d.Content.MatchFacts.Events.Events {
 		player := playerRef(ev.Player)
@@ -333,6 +347,7 @@ func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEv
 			addedTime = ev.MinutesAddedInput
 		}
 		ownGoal := ev.OwnGoal != nil
+		period := periodFromMinute(minute)
 
 		events = append(events, domain.MatchEvent{
 			Minute:       minute,
@@ -349,6 +364,7 @@ func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEv
 			GoalDesc:     ev.GoalDescription,
 			OwnGoal:      ownGoal,
 			HalfStr:      ev.HalfStrShort,
+			Period:       period,
 			SortTime:     ev.Time,
 			SortOverload: overload,
 		})
@@ -374,6 +390,7 @@ func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEv
 		case "Miss":
 			shotDesc = "falló"
 		}
+		shotPeriod := periodFromMinute(s.Min)
 		events = append(events, domain.MatchEvent{
 			Minute:       s.Min,
 			AddedTime:    overload,
@@ -381,12 +398,16 @@ func (p *Provider) mapEvents(d *oldFotmob.MatchDetailsResponse) []domain.MatchEv
 			Team:         team,
 			Player:       &domain.PlayerRef{Name: s.PlayerName},
 			ShotDesc:     shotDesc,
+			Period:       shotPeriod,
 			SortTime:     s.Min,
 			SortOverload: overload,
 		})
 	}
 
 	sort.Slice(events, func(i, j int) bool {
+		if events[i].Period != events[j].Period {
+			return events[i].Period < events[j].Period
+		}
 		ti, tj := events[i].SortTime, events[j].SortTime
 		if ti == tj {
 			return events[i].SortOverload < events[j].SortOverload
@@ -430,6 +451,7 @@ func (p *Provider) addExtraTimeEvents(d *oldFotmob.MatchDetailsResponse, events 
 			Minute:       90,
 			EventType:    domain.EvAETStart,
 			Detail:       "Inicio del tiempo extra",
+			Period:       domain.PeriodETFirstHalf,
 			SortTime:     90,
 			SortOverload: maxOverload90 + 2,
 		})
@@ -454,6 +476,7 @@ func (p *Provider) addExtraTimeEvents(d *oldFotmob.MatchDetailsResponse, events 
 				Minute:       105,
 				EventType:    domain.EvAETS2,
 				Detail:       "Segundo tiempo extra",
+				Period:       domain.PeriodETSecondHalf,
 				SortTime:     105,
 				SortOverload: maxOverload105 + 1,
 			})
@@ -601,6 +624,94 @@ func (p *Provider) mapShotmap(d *oldFotmob.MatchDetailsResponse) []domain.Shot {
 	return out
 }
 
+func (p *Provider) mapPlayerStats(d *oldFotmob.MatchDetailsResponse) []domain.PlayerStatItem {
+	if len(d.Content.PlayerStats) == 0 {
+		return nil
+	}
+
+	out := make([]domain.PlayerStatItem, 0, len(d.Content.PlayerStats))
+	for _, ps := range d.Content.PlayerStats {
+		team := domain.SideAway
+		if teamIDMatch(d.General.HomeTeam.ID, ps.TeamID) {
+			team = domain.SideHome
+		}
+
+		item := domain.PlayerStatItem{
+			Player: ps.Name,
+			Team:   team,
+			IsGK:   ps.IsGoalkeeper,
+		}
+
+		for _, cat := range ps.Stats {
+			for label, field := range cat.Stats {
+				switch field.Key {
+				case "rating_title":
+					item.Rating = formatStatValue(field.Stat)
+				case "goals":
+					item.Stats = append(item.Stats, domain.PlayerStatRow{Label: label, Value: formatStatValue(field.Stat)})
+				case "assists":
+					item.Stats = append(item.Stats, domain.PlayerStatRow{Label: label, Value: formatStatValue(field.Stat)})
+				case "total_shots":
+					item.Stats = append(item.Stats, domain.PlayerStatRow{Label: label, Value: formatStatValue(field.Stat)})
+				case "accurate_passes":
+					item.Stats = append(item.Stats, domain.PlayerStatRow{Label: label, Value: formatPassStat(field.Stat)})
+				case "matchstats.headers.tackles":
+					item.Stats = append(item.Stats, domain.PlayerStatRow{Label: label, Value: formatStatValue(field.Stat)})
+				case "fouls":
+					item.Stats = append(item.Stats, domain.PlayerStatRow{Label: label, Value: formatStatValue(field.Stat)})
+				case "minutes_played":
+					item.Stats = append(item.Stats, domain.PlayerStatRow{Label: label, Value: formatStatValue(field.Stat)})
+				}
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func formatStatValue(s oldFotmob.PlayerStatValue) string {
+	switch s.Type {
+	case "integer":
+		return fmt.Sprintf("%.0f", toFloat(s.Value))
+	case "double":
+		return fmt.Sprintf("%.1f", toFloat(s.Value))
+	case "fractionWithPercentage":
+		if s.Total != nil && *s.Total > 0 {
+			v := toFloat(s.Value)
+			pct := v / *s.Total * 100
+			return fmt.Sprintf("%.0f/%.0f (%.0f%%)", v, *s.Total, pct)
+		}
+		return fmt.Sprintf("%.0f", toFloat(s.Value))
+	default:
+		return fmt.Sprintf("%v", s.Value)
+	}
+}
+
+func formatPassStat(s oldFotmob.PlayerStatValue) string {
+	if s.Total != nil {
+		return fmt.Sprintf("%.0f/%.0f", toFloat(s.Value), *s.Total)
+	}
+	return fmt.Sprintf("%.0f", toFloat(s.Value))
+}
+
+func toFloat(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case string:
+		if f, err := strconv.ParseFloat(n, 64); err == nil {
+			return f
+		}
+	}
+	return 0
+}
+
 func playerRef(ev *oldFotmob.EventPlayer) *domain.PlayerRef {
 	if ev == nil {
 		return nil
@@ -671,6 +782,19 @@ func parseLiveMinute(short string) int {
 		return 0
 	}
 	return m
+}
+
+func periodFromMinute(minute int) int {
+	switch {
+	case minute <= 45:
+		return domain.PeriodFirstHalf
+	case minute <= 90:
+		return domain.PeriodSecondHalf
+	case minute <= 105:
+		return domain.PeriodETFirstHalf
+	default:
+		return domain.PeriodETSecondHalf
+	}
 }
 
 func teamIDMatch(id interface{}, teamID int) bool {

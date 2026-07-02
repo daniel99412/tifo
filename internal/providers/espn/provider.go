@@ -471,10 +471,13 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 			desc = teamSide + " — " + desc
 		}
 
+		period := ke.Period.Number
+
 		existing = append(existing, domain.MatchEvent{
 			Minute:       minute,
 			AddedTime:    added,
 			EventType:    typ,
+			Period:       period,
 			Detail:       desc,
 			SortTime:     minute,
 			SortOverload: added,

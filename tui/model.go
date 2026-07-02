@@ -316,7 +316,7 @@ func (m *Model) selectMatch(idx int, matches []domain.Match) []tea.Cmd {
 		}
 		mdVal.Minute = minute
 	}
-	mdVal.Tabs = components.NewTabs([]string{"Alineaciones", "Eventos", "Estadísticas", "H2H", "Lesiones"})
+	mdVal.Tabs = components.NewTabs([]string{"Alineaciones", "Eventos", "Estadísticas", "Jugadores", "H2H", "Lesiones"})
 	m.detailView = &mdVal
 	m.matchDetails = nil
 	m.detailErr = ""
@@ -493,14 +493,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				// Update Status.Detail from live minute / events
 				detail := ""
-				for _, ev := range msg.details.Events {
-					if ev.EventType == domain.EvHalf && ev.HalfStr == "HT" {
-						detail = "HT"
-						break
+				if lm := msg.details.Match.LiveMinute; lm > 45 {
+					detail = fmt.Sprintf("%d'", lm)
+				} else {
+					for _, ev := range msg.details.Events {
+						if ev.EventType == domain.EvHalf && ev.HalfStr == "HT" {
+							detail = "HT"
+							break
+						}
 					}
-				}
-				if detail == "" {
-					if lm := msg.details.Match.LiveMinute; lm > 0 {
+					if detail == "" && lm > 0 {
 						detail = fmt.Sprintf("%d'", lm)
 					}
 				}
@@ -627,7 +629,7 @@ if msg.details.Match.Score != "" {
 				} else {
 					m.detailView.Minute = computeMatchMinute(m.selectedMatch.Status.Kickoff, m.selectedMatch.Status.FirstHalfAddedTime)
 				}
-				if m.matchDetails != nil && isHalfTime(m.matchDetails.Events) {
+				if m.matchDetails != nil && isHalfTime(m.matchDetails.Events) && m.detailMinute <= 45 {
 					m.detailView.Minute = "HT"
 					m.selectedMatch.Status.Detail = "HT"
 				}
@@ -727,38 +729,43 @@ func (m Model) updateDetail(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.selectedMatch = nil
 		m.detailView = nil
 		m.matchDetails = nil
-	case "left", "h":
+	case "left":
 		if m.detailView != nil {
 			m.detailView.Tabs.Left()
 		}
-	case "right", "l":
+	case "right":
 		if m.detailView != nil {
 			m.detailView.Tabs.Right()
 		}
 	case "u":
 		if m.detailView != nil {
-			m.detailView.ScrollOff -= 3
-			if m.detailView.ScrollOff < 0 {
-				m.detailView.ScrollOff = 0
-			}
+			m.detailView.ScrollUp(3)
 		}
 	case "d":
 		if m.detailView != nil {
-			m.detailView.ScrollOff += 3
+			m.detailView.ScrollDown(3)
 		}
 	case "a":
-		if m.detailView != nil && m.detailView.Tabs.Active() == 2 {
+		if m.detailView != nil {
 			m.detailView.ChangePeriodPrev()
 		}
 	case "s":
-		if m.detailView != nil && m.detailView.Tabs.Active() == 2 {
+		if m.detailView != nil {
 			m.detailView.ChangePeriodNext()
 		}
 	case "1", "2", "3", "4", "5":
-		if m.detailView != nil && m.detailView.Tabs.Active() == 2 {
+		if m.detailView != nil {
 			var n int
 			fmt.Sscanf(msg.String(), "%d", &n)
 			m.detailView.SelectPeriodByIndex(n)
+		}
+	case "h":
+		if m.detailView != nil && m.detailView.PlayerStats != nil {
+			m.detailView.PlayerStats.FocusHome()
+		}
+	case "l":
+		if m.detailView != nil && m.detailView.PlayerStats != nil {
+			m.detailView.PlayerStats.FocusAway()
 		}
 	}
 	return m, nil
@@ -1121,13 +1128,17 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 			HalfStr:      ev.HalfStr,
 			OwnGoal:      ev.OwnGoal,
 			ShotDesc:     ev.ShotDesc,
+			Period:       ev.Period,
 			SortTime:     ev.SortTime,
 			SortOverload: ev.SortOverload,
 		})
 	}
 
-	// Sort events
+	// Sort events by period first, then time+overload
 	sort.SliceStable(data.Events.Items, func(i, j int) bool {
+		if data.Events.Items[i].Period != data.Events.Items[j].Period {
+			return data.Events.Items[i].Period < data.Events.Items[j].Period
+		}
 		ti, tj := data.Events.Items[i].SortTime, data.Events.Items[j].SortTime
 		if ti != tj {
 			return ti < tj
@@ -1197,6 +1208,9 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 			data.Injuries.Away = append(data.Injuries.Away, item)
 		}
 	}
+
+	// Player stats
+	data.PlayerStats = d.PlayerStats
 
 	// Extra info
 	data.Events.ExtraInfo = &components.MatchExtraInfo{
@@ -1297,9 +1311,7 @@ func computeMatchMinuteFromEvents(ko, lastUpdate time.Time, minute int, added in
 			}
 			return fmt.Sprintf("%d:%02d", em, es)
 		}
-		return "HT"
-	case minute < 60:
-		return "HT"
+		return fmt.Sprintf("45+%d", em-45)
 	case minute <= 90:
 		if em <= 90 {
 			if em == 90 && es > 0 {
@@ -1330,6 +1342,9 @@ func isWaterBreakActive(events []domain.MatchEvent) bool {
 	sorted := make([]domain.MatchEvent, len(events))
 	copy(sorted, events)
 	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Period != sorted[j].Period {
+			return sorted[i].Period < sorted[j].Period
+		}
 		if sorted[i].SortTime == sorted[j].SortTime {
 			return sorted[i].SortOverload < sorted[j].SortOverload
 		}
@@ -1373,39 +1388,30 @@ func isHalfTime(events []domain.MatchEvent) bool {
 	sorted := make([]domain.MatchEvent, len(events))
 	copy(sorted, events)
 	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Period != sorted[j].Period {
+			return sorted[i].Period < sorted[j].Period
+		}
 		if sorted[i].SortTime == sorted[j].SortTime {
 			return sorted[i].SortOverload < sorted[j].SortOverload
 		}
 		return sorted[i].SortTime < sorted[j].SortTime
 	})
 	lastHT := -1
-	lastS2 := -1
-	lastAET := -1
-	lastEventMinute := 0
 	for i, ev := range sorted {
 		if ev.EventType == domain.EvHalf && ev.HalfStr == "HT" {
 			lastHT = i
-		}
-		if ev.EventType == domain.EvS2 {
-			lastS2 = i
-		}
-		if ev.EventType == domain.EvAETStart {
-			lastAET = i
-		}
-		if ev.SortTime > lastEventMinute {
-			lastEventMinute = ev.SortTime
 		}
 	}
 	if lastHT == -1 {
 		return false
 	}
-	if lastAET > lastHT {
-		return false
+	// Si hay eventos en segundo tiempo (o después) después de HT, ya pasó el medio tiempo
+	for i := lastHT + 1; i < len(sorted); i++ {
+		if sorted[i].Period >= domain.PeriodSecondHalf {
+			return false
+		}
 	}
-	if lastS2 > lastHT {
-		return false
-	}
-	return lastEventMinute < 60
+	return true
 }
 
 func padRight(s string, w int) string {

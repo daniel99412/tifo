@@ -159,7 +159,7 @@ type MatchDetailsContent struct {
 		AwayTeam LineupTeam `json:"awayTeam"`
 	} `json:"lineup"`
 	H2H H2HWrapper `json:"h2h"`
-	PlayerStats map[string]PlayerStat `json:"playerStats"`
+	PlayerStats map[string]PlayerStatsRaw `json:"playerStats"`
 	Shotmap ShotmapData `json:"shotmap"`
 	Momentum MomentumWrapper `json:"momentum"`
 }
@@ -349,10 +349,30 @@ type H2HMatch struct {
 	} `json:"league"`
 }
 
-type PlayerStat struct {
-	Rating struct {
-		Num string `json:"num"`
-	} `json:"rating"`
+type PlayerStatsRaw struct {
+	Name         string                     `json:"name"`
+	ID           int                        `json:"id"`
+	TeamID       int                        `json:"teamId"`
+	TeamName     string                     `json:"teamName"`
+	IsGoalkeeper bool                       `json:"isGoalkeeper"`
+	Stats        []PlayerStatCategoryRaw    `json:"stats"`
+}
+
+type PlayerStatCategoryRaw struct {
+	Title string                          `json:"title"`
+	Key   string                          `json:"key"`
+	Stats map[string]PlayerStatFieldRaw   `json:"stats"`
+}
+
+type PlayerStatFieldRaw struct {
+	Key  string          `json:"key"`
+	Stat PlayerStatValue `json:"stat"`
+}
+
+type PlayerStatValue struct {
+	Value interface{} `json:"value"`
+	Total *float64    `json:"total"`
+	Type  string      `json:"type"`
 }
 
 // TeamFormEntry is a single fixture in a team's recent form list (content.matchFacts.teamForm).

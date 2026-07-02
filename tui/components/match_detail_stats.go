@@ -285,9 +285,18 @@ func absInt(n int) int {
 
 func (md *MatchDetail) availablePeriods() []int {
 	order := []int{domain.PeriodAll, domain.PeriodFirstHalf, domain.PeriodSecondHalf, domain.PeriodETFirstHalf, domain.PeriodETSecondHalf}
+	seen := make(map[int]bool)
+	for p := range md.Details.StatsByPeriod {
+		seen[p] = true
+	}
+	for _, ev := range md.Details.Events.Items {
+		if ev.Period > 0 {
+			seen[ev.Period] = true
+		}
+	}
 	var out []int
 	for _, p := range order {
-		if _, ok := md.Details.StatsByPeriod[p]; ok {
+		if p == domain.PeriodAll || seen[p] {
 			out = append(out, p)
 		}
 	}

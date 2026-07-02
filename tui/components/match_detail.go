@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"strings"
+
 	"tifo/internal/domain"
 
 	"github.com/charmbracelet/lipgloss"
@@ -96,7 +97,7 @@ type MatchDetail struct {
 	Tabs        Tabs
 	Details     *MatchDetailData
 	ScrollOff   int
-	MaxScroll   int
+	PlayerStats *PlayerStatsView
 	Error       string
 }
 
@@ -108,6 +109,7 @@ type MatchDetailData struct {
 	Events   EventData
 	H2H      H2HData
 	Injuries InjuriesData
+	PlayerStats []domain.PlayerStatItem
 }
 
 type StatCategory struct {
@@ -180,6 +182,7 @@ type EventItem struct {
 	HalfStr      string
 	OwnGoal      bool
 	ShotDesc     string
+	Period       int
 	SortTime     int
 	SortOverload int
 }
@@ -237,20 +240,28 @@ func NewMatchDetail(home, away, score, status, dateTime, matchID string) MatchDe
 		Status:    status,
 		DateTime:  dateTime,
 		MatchID:   matchID,
-		HomeScore: homeScore,
-		AwayScore: awayScore,
-		Tabs:      NewTabs([]string{"Alineaciones", "Eventos", "Estadísticas", "H2H", "Lesiones"}),
+		HomeScore:   homeScore,
+		AwayScore:   awayScore,
+		Tabs:        NewTabs([]string{"Alineaciones", "Eventos", "Estadísticas", "Jugadores", "H2H", "Lesiones"}),
+		PlayerStats: NewPlayerStatsView(),
 	}
 }
 
-func (md *MatchDetail) ScrollUp() {
-	if md.ScrollOff > 0 {
-		md.ScrollOff--
+func (md *MatchDetail) ScrollUp(step int) {
+	md.ScrollOff -= step
+	if md.ScrollOff < 0 {
+		md.ScrollOff = 0
+	}
+	if md.PlayerStats != nil {
+		md.PlayerStats.ScrollUp(step)
 	}
 }
 
-func (md *MatchDetail) ScrollDown() {
-	md.ScrollOff++
+func (md *MatchDetail) ScrollDown(step int) {
+	md.ScrollOff += step
+	if md.PlayerStats != nil {
+		md.PlayerStats.ScrollDown(step)
+	}
 }
 
 func (md *MatchDetail) SetError(err string) {
@@ -277,6 +288,9 @@ func (md *MatchDetail) ChangePeriodPrev() {
 	}
 	md.Details.SelectedPeriod = periods[cur]
 	md.ScrollOff = 0
+	if md.PlayerStats != nil {
+		md.PlayerStats.Reset()
+	}
 }
 
 // ChangePeriodNext moves to the next available stats period.
@@ -299,6 +313,9 @@ func (md *MatchDetail) ChangePeriodNext() {
 	}
 	md.Details.SelectedPeriod = periods[cur]
 	md.ScrollOff = 0
+	if md.PlayerStats != nil {
+		md.PlayerStats.Reset()
+	}
 }
 
 // SelectPeriodByIndex selects the nth available period (1-based).
@@ -312,6 +329,9 @@ func (md *MatchDetail) SelectPeriodByIndex(n int) {
 	}
 	md.Details.SelectedPeriod = periods[n-1]
 	md.ScrollOff = 0
+	if md.PlayerStats != nil {
+		md.PlayerStats.Reset()
+	}
 }
 
 func indexOf(slice []int, val int) int {
@@ -468,14 +488,49 @@ func (md *MatchDetail) renderTabContent(width, height int) string {
 	case 2:
 		return md.renderStats(width, height)
 	case 3:
-		return md.renderH2H(width, height)
+		if md.Details == nil || md.PlayerStats == nil {
+			return mdInfoStyle.Render("sin estadisticas de jugadores")
+		}
+		homeColor, awayColor := md.teamColors()
+		return md.PlayerStats.Render(
+			md.Details.PlayerStats,
+			md.HomeName, md.AwayName,
+			homeColor, awayColor,
+			width, height,
+		)
 	case 4:
+		return md.renderH2H(width, height)
+	case 5:
 		return md.renderInjuries(width, height)
 	}
 	return ""
 }
 
+func (md *MatchDetail) teamColors() (homeColor, awayColor lipgloss.Color) {
+	homeColor = lipgloss.Color("39")
+	awayColor = lipgloss.Color("196")
+	if md.Details != nil && md.Details.Events.ExtraInfo != nil {
+		if c := md.Details.Events.ExtraInfo.HomeColor; c != "" {
+			if !strings.HasPrefix(c, "#") {
+				c = "#" + c
+			}
+			homeColor = lipgloss.Color(c)
+		}
+		if c := md.Details.Events.ExtraInfo.AwayColor; c != "" {
+			if !strings.HasPrefix(c, "#") {
+				c = "#" + c
+			}
+			awayColor = lipgloss.Color(c)
+		}
+	}
+	return
+}
+
 func (md *MatchDetail) applyScroll(body string, width, height int) string {
+	return applyColumnScroll(body, width, height, &md.ScrollOff)
+}
+
+func applyColumnScroll(body string, width, height int, scrollOff *int) string {
 	allLines := strings.Split(body, "\n")
 	total := len(allLines)
 
@@ -483,12 +538,11 @@ func (md *MatchDetail) applyScroll(body string, width, height int) string {
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
-	md.MaxScroll = maxScroll
-	if md.ScrollOff > maxScroll {
-		md.ScrollOff = maxScroll
+	if *scrollOff > maxScroll {
+		*scrollOff = maxScroll
 	}
 
-	start := md.ScrollOff
+	start := *scrollOff
 	end := start + height
 	if end > total {
 		end = total
@@ -504,10 +558,7 @@ func (md *MatchDetail) applyScroll(body string, width, height int) string {
 
 	scrollIndicator := ""
 	if maxScroll > 0 {
-		pct := 0
-		if maxScroll > 0 {
-			pct = md.ScrollOff * 100 / maxScroll
-		}
+		pct := *scrollOff * 100 / maxScroll
 		scrollIndicator = mdInfoStyle.Render(fmt.Sprintf("  [%d%%]", pct))
 	}
 

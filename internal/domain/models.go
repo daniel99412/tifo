@@ -122,6 +122,7 @@ type MatchDetails struct {
 	H2H           *H2H
 	Injuries      []InjuryItem
 	ShotMap       []Shot
+	PlayerStats   []PlayerStatItem
 
 	ExtraInfo MatchExtraInfo
 }
@@ -189,6 +190,8 @@ type MatchEvent struct {
 	OwnGoal      bool
 	ShotDesc     string
 	HalfStr      string
+	// Period: 0=unknown, 1=FirstHalf, 2=SecondHalf, 3=ET1, 4=ET2
+	Period int
 	// Internal sorting
 	SortTime     int
 	SortOverload int
@@ -262,6 +265,19 @@ type StatRow struct {
 	// Provenance: which provider supplied this value
 	HomeProvider string
 	AwayProvider string
+}
+
+type PlayerStatItem struct {
+	Player string
+	Team   TeamSide
+	IsGK   bool
+	Rating string
+	Stats  []PlayerStatRow
+}
+
+type PlayerStatRow struct {
+	Label string
+	Value string
 }
 
 // H2H contains head-to-head aggregate data.

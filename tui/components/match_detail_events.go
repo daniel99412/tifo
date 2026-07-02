@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"tifo/internal/domain"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -11,13 +12,29 @@ func (md *MatchDetail) renderEvents(width, height int) string {
 		return mdInfoStyle.Render("sin eventos")
 	}
 
+	periods := md.availablePeriods()
+
+	var bodyLines []string
+
+	if len(periods) > 1 {
+		bodyLines = append(bodyLines, md.renderPeriodSubtabs(periods, width))
+		bodyLines = append(bodyLines, "")
+	}
+
 	var eventLines []string
+	selPeriod := md.Details.SelectedPeriod
 	for _, ev := range md.Details.Events.Items {
+		if selPeriod > 0 && selPeriod != domain.PeriodAll && ev.Period != selPeriod {
+			continue
+		}
 		timeCell := mdTimeStyle.Render(ev.Minute)
 		typeCell := md.eventTypeCell(ev)
 		descCell := md.eventDesc(ev)
 		row := lipgloss.JoinHorizontal(lipgloss.Top, timeCell, typeCell, descCell)
 		eventLines = append(eventLines, row)
+	}
+	if len(eventLines) == 0 {
+		eventLines = append(eventLines, mdInfoStyle.Render("sin eventos en este periodo"))
 	}
 
 	eventColW := width - 24
@@ -26,10 +43,16 @@ func (md *MatchDetail) renderEvents(width, height int) string {
 	}
 	legendW := 22
 
+	headerH := len(bodyLines)
+	scrollH := height - headerH
+	if scrollH < 1 {
+		scrollH = 1
+	}
 	eventsBody := lipgloss.JoinVertical(lipgloss.Top, eventLines...)
-	scrollPart := md.applyScroll(eventsBody, eventColW, height)
+	scrollPart := md.applyScroll(eventsBody, eventColW, scrollH)
 
-	left := lipgloss.NewStyle().Width(eventColW).Render(scrollPart)
+	bodyLines = append(bodyLines, scrollPart)
+	left := lipgloss.NewStyle().Width(eventColW).Render(lipgloss.JoinVertical(lipgloss.Top, bodyLines...))
 
 	var legLines []string
 	legLines = append(legLines, mdSectionHeader.Render("Simbología"))
