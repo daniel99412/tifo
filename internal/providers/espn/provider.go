@@ -287,7 +287,7 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 	}
 	out.Events = p.mapExtraEvents(data, fotmobDetails.Events, homeTeam, awayTeam)
 
-	out.Statistics = p.mapStats(data, fotmobDetails.Statistics)
+	out.StatsByPeriod = p.mapStats(data, fotmobDetails.StatsByPeriod)
 
 	p.enrichPositions(&out, data.Summary.Rosters)
 
@@ -434,9 +434,12 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 	return existing
 }
 
-func (p *Provider) mapStats(data *oldESPN.EnrichData, existing []domain.StatCategory) []domain.StatCategory {
+func (p *Provider) mapStats(data *oldESPN.EnrichData, existing domain.StatsByPeriod) domain.StatsByPeriod {
 	if len(data.Summary.Boxscore.Teams) < 2 {
 		return existing
+	}
+	if existing == nil {
+		existing = domain.StatsByPeriod{}
 	}
 
 	espnByName := make(map[string][2]string)
@@ -481,27 +484,32 @@ func (p *Provider) mapStats(data *oldESPN.EnrichData, existing []domain.StatCate
 		"punches":           "Punches",
 	}
 
+	// ESPN only provides full-match stats, so fill gaps in PeriodAll.
+	allCats, ok := existing[domain.PeriodAll]
+	if !ok {
+		return existing
+	}
 	for espnName, fotmobKey := range espnFotmobKey {
 		vals, ok := espnByName[espnName]
 		if !ok {
 			continue
 		}
-		for ci, cat := range existing {
+		for ci, cat := range allCats {
 			for si, s := range cat.Stats {
 				if s.Key == fotmobKey {
 					if s.Home == "" {
-						existing[ci].Stats[si].Home = vals[0]
-						existing[ci].Stats[si].HomeProvider = "espn"
+						allCats[ci].Stats[si].Home = vals[0]
+						allCats[ci].Stats[si].HomeProvider = "espn"
 					}
 					if s.Away == "" {
-						existing[ci].Stats[si].Away = vals[1]
-						existing[ci].Stats[si].AwayProvider = "espn"
+						allCats[ci].Stats[si].Away = vals[1]
+						allCats[ci].Stats[si].AwayProvider = "espn"
 					}
 				}
 			}
 		}
 	}
-
+	existing[domain.PeriodAll] = allCats
 	return existing
 }
 

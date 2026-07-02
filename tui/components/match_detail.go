@@ -101,7 +101,9 @@ type MatchDetail struct {
 }
 
 type MatchDetailData struct {
-	Stats    []StatCategory
+	StatsByPeriod map[int][]StatCategory
+	Momentum      []MomentumPoint
+	SelectedPeriod int
 	Lineup   LineupData
 	Events   EventData
 	H2H      H2HData
@@ -117,6 +119,11 @@ type StatRow struct {
 	Label string
 	Home  string
 	Away  string
+}
+
+type MomentumPoint struct {
+	Minute int
+	Value  int
 }
 
 type LineupData struct {
@@ -248,6 +255,72 @@ func (md *MatchDetail) SetError(err string) {
 	md.Error = err
 }
 
+// ChangePeriodPrev moves to the previous available stats period.
+func (md *MatchDetail) ChangePeriodPrev() {
+	if md.Details == nil {
+		return
+	}
+	periods := md.availablePeriods()
+	if len(periods) < 2 {
+		return
+	}
+	cur := indexOf(periods, md.Details.SelectedPeriod)
+	if cur < 0 {
+		md.Details.SelectedPeriod = periods[0]
+		return
+	}
+	cur--
+	if cur < 0 {
+		cur = len(periods) - 1
+	}
+	md.Details.SelectedPeriod = periods[cur]
+	md.ScrollOff = 0
+}
+
+// ChangePeriodNext moves to the next available stats period.
+func (md *MatchDetail) ChangePeriodNext() {
+	if md.Details == nil {
+		return
+	}
+	periods := md.availablePeriods()
+	if len(periods) < 2 {
+		return
+	}
+	cur := indexOf(periods, md.Details.SelectedPeriod)
+	if cur < 0 {
+		md.Details.SelectedPeriod = periods[0]
+		return
+	}
+	cur++
+	if cur >= len(periods) {
+		cur = 0
+	}
+	md.Details.SelectedPeriod = periods[cur]
+	md.ScrollOff = 0
+}
+
+// SelectPeriodByIndex selects the nth available period (1-based).
+func (md *MatchDetail) SelectPeriodByIndex(n int) {
+	if md.Details == nil {
+		return
+	}
+	periods := md.availablePeriods()
+	if n < 1 || n > len(periods) {
+		return
+	}
+	md.Details.SelectedPeriod = periods[n-1]
+	md.ScrollOff = 0
+}
+
+func indexOf(slice []int, val int) int {
+	for i, v := range slice {
+		if v == val {
+			return i
+		}
+	}
+	return -1
+}
+
 func (md *MatchDetail) Render(width, height int) string {
 	if width < 5 || height < 5 {
 		return ""
@@ -361,7 +434,7 @@ func (md *MatchDetail) Render(width, height int) string {
 	content := md.renderTabContent(width, contentH)
 	lines = append(lines, content)
 
-	lines = append(lines, mdBackStyle.Render("←/→ tabs · u/d scroll · esc volver"))
+	lines = append(lines, mdBackStyle.Render("←/→ tabs · u/d scroll · a/s periodo · esc volver"))
 
 	body := lipgloss.JoinVertical(lipgloss.Top, lines...)
 	return lipgloss.NewStyle().PaddingLeft(pad).PaddingRight(pad).Render(body)

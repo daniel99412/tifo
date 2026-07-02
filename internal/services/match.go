@@ -6,7 +6,6 @@ import (
 	"log"
 	"time"
 	"tifo/internal/domain"
-	"tifo/internal/enrich"
 	"tifo/internal/providers"
 )
 
@@ -18,19 +17,17 @@ type MatchContext struct {
 	AwayTeam   string
 }
 
-// MatchService coordinates providers, resolvers, and enrichers for match data.
+// MatchService coordinates providers and enrichers for match data.
 type MatchService struct {
 	primary   providers.Provider
 	enrichers []providers.Provider
-	enricher  *enrich.Enricher
 }
 
 // NewMatchService creates a MatchService with a primary provider and optional enrichers.
-func NewMatchService(primary providers.Provider, enrichers []providers.Provider, enrichCfg enrich.MergeConfig) *MatchService {
+func NewMatchService(primary providers.Provider, enrichers []providers.Provider) *MatchService {
 	return &MatchService{
 		primary:   primary,
 		enrichers: enrichers,
-		enricher:  enrich.NewEnricher(enrichCfg),
 	}
 }
 

@@ -149,11 +149,7 @@ type MatchDetailsContent struct {
 		} `json:"events"`
 	} `json:"matchFacts"`
 	Stats struct {
-		Periods struct {
-			All struct {
-				Stats []StatCategory `json:"stats"`
-			} `json:"All"`
-		} `json:"Periods"`
+		Periods Periods `json:"Periods"`
 	} `json:"stats"`
 	Lineup struct {
 		HomeTeam LineupTeam `json:"homeTeam"`
@@ -162,6 +158,11 @@ type MatchDetailsContent struct {
 	H2H H2HWrapper `json:"h2h"`
 	PlayerStats map[string]PlayerStat `json:"playerStats"`
 	Shotmap ShotmapData `json:"shotmap"`
+	Momentum struct {
+		Main struct {
+			Data []MomentumPoint `json:"data"`
+		} `json:"main"`
+	} `json:"momentum"`
 }
 
 type MatchEvent struct {
@@ -197,15 +198,35 @@ type EventSwap struct {
 }
 
 type StatCategory struct {
-	Title  string `json:"title"`
-	Key    string `json:"key"`
+	Title  string      `json:"title"`
+	Key    string      `json:"key"`
 	Stats  []StatEntry `json:"stats"`
 }
 
 type StatEntry struct {
-	Title  string      `json:"title"`
-	Key    string      `json:"key"`
+	Title  string        `json:"title"`
+	Key    string        `json:"key"`
 	Stats  []interface{} `json:"stats"`
+}
+
+// PeriodStats holds the stats categories for a single match period.
+type PeriodStats struct {
+	Stats []StatCategory `json:"stats"`
+}
+
+// Periods holds stats for each segment of the match.
+type Periods struct {
+	All             PeriodStats `json:"All"`
+	FirstHalf       PeriodStats `json:"FirstHalf"`
+	SecondHalf      PeriodStats `json:"SecondHalf"`
+	FirstExtraHalf  PeriodStats `json:"FirstExtraHalf"`
+	SecondExtraHalf PeriodStats `json:"SecondExtraHalf"`
+}
+
+// MomentumPoint is a single momentum sample from the match.
+type MomentumPoint struct {
+	Minute float64 `json:"minute"`
+	Value  int     `json:"value"`
 }
 
 type LineupTeam struct {

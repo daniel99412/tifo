@@ -191,7 +191,8 @@ func (p *Provider) mapMatchDetails(d *oldFotmob.MatchDetailsResponse) (*domain.M
 	md.Events = p.addExtraTimeEvents(d, md.Events)
 
 	// Statistics
-	md.Statistics = p.mapStats(d)
+	md.StatsByPeriod = p.mapStats(d)
+	md.Momentum = p.mapMomentum(d)
 
 	// H2H
 	md.H2H = p.mapH2H(d)
@@ -420,9 +421,31 @@ func (p *Provider) addExtraTimeEvents(d *oldFotmob.MatchDetailsResponse, events 
 	return events
 }
 
-func (p *Provider) mapStats(d *oldFotmob.MatchDetailsResponse) []domain.StatCategory {
+func (p *Provider) mapStats(d *oldFotmob.MatchDetailsResponse) domain.StatsByPeriod {
+	out := domain.StatsByPeriod{}
+	periods := []struct {
+		key  int
+		data oldFotmob.PeriodStats
+	}{
+		{domain.PeriodAll, d.Content.Stats.Periods.All},
+		{domain.PeriodFirstHalf, d.Content.Stats.Periods.FirstHalf},
+		{domain.PeriodSecondHalf, d.Content.Stats.Periods.SecondHalf},
+		{domain.PeriodETFirstHalf, d.Content.Stats.Periods.FirstExtraHalf},
+		{domain.PeriodETSecondHalf, d.Content.Stats.Periods.SecondExtraHalf},
+	}
+	for _, pd := range periods {
+		cats := p.mapPeriodStats(pd.data)
+		if len(cats) == 0 {
+			continue
+		}
+		out[pd.key] = cats
+	}
+	return out
+}
+
+func (p *Provider) mapPeriodStats(period oldFotmob.PeriodStats) []domain.StatCategory {
 	var out []domain.StatCategory
-	for _, cat := range d.Content.Stats.Periods.All.Stats {
+	for _, cat := range period.Stats {
 		sc := domain.StatCategory{Title: cat.Title, Key: cat.Key}
 		for _, s := range cat.Stats {
 			homeVal := ""
@@ -441,6 +464,18 @@ func (p *Provider) mapStats(d *oldFotmob.MatchDetailsResponse) []domain.StatCate
 			})
 		}
 		out = append(out, sc)
+	}
+	return out
+}
+
+func (p *Provider) mapMomentum(d *oldFotmob.MatchDetailsResponse) []domain.MomentumPoint {
+	src := d.Content.Momentum.Main.Data
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]domain.MomentumPoint, 0, len(src))
+	for _, mp := range src {
+		out = append(out, domain.MomentumPoint{Minute: int(mp.Minute), Value: mp.Value})
 	}
 	return out
 }

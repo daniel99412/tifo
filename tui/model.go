@@ -9,7 +9,6 @@ import (
 	espn "tifo/espn"
 	fotmob "tifo/fotmob"
 	"tifo/internal/domain"
-	"tifo/internal/enrich"
 	"tifo/internal/persistence/sqlite"
 	"tifo/internal/providers"
 	espnProvider "tifo/internal/providers/espn"
@@ -154,7 +153,7 @@ func buildService() *services.MatchService {
 	fp := fotmobProvider.NewProvider(oldFotmob, mr, tr, cr)
 	ep := espnProvider.NewProvider(oldESPN)
 
-	return services.NewMatchService(fp, []providers.Provider{ep}, enrich.DefaultMergeConfig())
+	return services.NewMatchService(fp, []providers.Provider{ep})
 }
 
 func (m Model) Init() tea.Cmd {
@@ -529,8 +528,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			if m.detailView != nil {
-				m.detailView.Details = buildFromDomain(msg.details, m.espnStatus)
+		if m.detailView != nil {
+			oldPeriod := 0
+			if m.detailView.Details != nil {
+				oldPeriod = m.detailView.Details.SelectedPeriod
+			}
+			m.detailView.Details = buildFromDomain(msg.details, m.espnStatus)
+			if _, ok := m.detailView.Details.StatsByPeriod[oldPeriod]; ok {
+				m.detailView.Details.SelectedPeriod = oldPeriod
+			}
 if msg.details.Match.Score != "" {
 					m.detailView.Score = msg.details.Match.Score
 					parts := strings.Split(msg.details.Match.Score, "-")
@@ -721,6 +727,20 @@ func (m Model) updateDetail(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "d":
 		if m.detailView != nil {
 			m.detailView.ScrollOff += 3
+		}
+	case "a":
+		if m.detailView != nil && m.detailView.Tabs.Active() == 2 {
+			m.detailView.ChangePeriodPrev()
+		}
+	case "s":
+		if m.detailView != nil && m.detailView.Tabs.Active() == 2 {
+			m.detailView.ChangePeriodNext()
+		}
+	case "1", "2", "3", "4", "5":
+		if m.detailView != nil && m.detailView.Tabs.Active() == 2 {
+			var n int
+			fmt.Sscanf(msg.String(), "%d", &n)
+			m.detailView.SelectPeriodByIndex(n)
 		}
 	}
 	return m, nil
@@ -971,17 +991,33 @@ func posAbbr(posID int, posName string) string {
 func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.MatchDetailData {
 	data := &components.MatchDetailData{}
 
-	// Stats
-	for _, cat := range d.Statistics {
-		sc := components.StatCategory{Title: cat.Title}
-		for _, s := range cat.Stats {
-			sc.Stats = append(sc.Stats, components.StatRow{
-				Label: s.Label,
-				Home:  s.Home,
-				Away:  s.Away,
-			})
+	// Stats by period
+	for period, cats := range d.StatsByPeriod {
+		uiCats := make([]components.StatCategory, 0, len(cats))
+		for _, cat := range cats {
+			sc := components.StatCategory{Title: cat.Title}
+			for _, s := range cat.Stats {
+				sc.Stats = append(sc.Stats, components.StatRow{
+					Label: s.Label,
+					Home:  s.Home,
+					Away:  s.Away,
+				})
+			}
+			uiCats = append(uiCats, sc)
 		}
-		data.Stats = append(data.Stats, sc)
+		if data.StatsByPeriod == nil {
+			data.StatsByPeriod = make(map[int][]components.StatCategory)
+		}
+		data.StatsByPeriod[period] = uiCats
+	}
+	data.SelectedPeriod = domain.PeriodAll
+
+	// Momentum
+	for _, mp := range d.Momentum {
+		data.Momentum = append(data.Momentum, components.MomentumPoint{
+			Minute: mp.Minute,
+			Value:  mp.Value,
+		})
 	}
 
 	// Lineups

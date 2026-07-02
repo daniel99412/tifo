@@ -115,14 +115,24 @@ type MatchDetails struct {
 	ExternalIDs ExternalIDs
 	Match       MatchRef
 
-	Lineups    *Lineups
-	Events     []MatchEvent
-	Statistics []StatCategory
-	H2H        *H2H
-	Injuries   []InjuryItem
-	ShotMap    []Shot
+	Lineups       *Lineups
+	Events        []MatchEvent
+	StatsByPeriod StatsByPeriod
+	Momentum      []MomentumPoint
+	H2H           *H2H
+	Injuries      []InjuryItem
+	ShotMap       []Shot
 
 	ExtraInfo MatchExtraInfo
+}
+
+// StatsByPeriod holds statistics keyed by period constant (PeriodAll, PeriodFirstHalf, ...).
+type StatsByPeriod map[int][]StatCategory
+
+// MomentumPoint is a single momentum sample: value -100..+100, positive = home.
+type MomentumPoint struct {
+	Minute int
+	Value  int
 }
 
 // MatchRef is a lightweight match reference.
@@ -213,7 +223,7 @@ const (
 	EvPenShootout  EventType = "Penales"
 )
 
-// MatchPeriod constants for MatchStatus.Period.
+// MatchPeriod constants for MatchStatus.Period and StatsByPeriod keys.
 const (
 	PeriodUnknown      = 0
 	PeriodFirstHalf    = 1
@@ -221,6 +231,8 @@ const (
 	PeriodETFirstHalf  = 3
 	PeriodETSecondHalf = 4
 	PeriodPenalties    = 5
+	// PeriodAll is a StatsByPeriod key for the full-match aggregate (not a real period).
+	PeriodAll = 100
 )
 
 // TeamSide distinguishes home/away/neutral.
