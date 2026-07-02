@@ -206,8 +206,9 @@ func (p *Provider) mapMatchDetails(d *oldFotmob.MatchDetailsResponse) (*domain.M
 	}
 
 	if lt := d.Header.Status.LiveTime; lt != nil {
-		md.Match.LiveMinute = lt.MaxTime
-		log.Printf("[fotmob] LiveTime: maxTime=%d short=%q addedTime=%d", lt.MaxTime, lt.Short, lt.AddedTime)
+		md.Match.LiveMinute = parseLiveMinute(lt.Short)
+		log.Printf("[fotmob] LiveTime: maxTime=%d short=%q addedTime=%d basePeriod=%d parsedMinute=%d",
+			lt.MaxTime, lt.Short, lt.AddedTime, lt.BasePeriod, md.Match.LiveMinute)
 	}
 
 	// Lineups
@@ -654,6 +655,22 @@ func mapFotmobStatus(live, finished bool, homeScore, awayScore *int, ko time.Tim
 	default:
 		return domain.MatchScheduled
 	}
+}
+
+func parseLiveMinute(short string) int {
+	s := strings.TrimSuffix(short, "'")
+	switch s {
+	case "HT", "FT", "ET", "P", "":
+		return 0
+	}
+	if idx := strings.IndexByte(s, '+'); idx >= 0 {
+		s = s[:idx]
+	}
+	m, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return m
 }
 
 func teamIDMatch(id interface{}, teamID int) bool {

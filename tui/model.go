@@ -1244,30 +1244,36 @@ func computeMatchMinuteFromEvents(ko, lastUpdate time.Time, minute int, added in
 	es := phaseSec % 60
 
 	switch {
-	case em <= 45:
-		if em == 45 && es > 0 {
-			return fmt.Sprintf("45+%d", es)
+	case minute <= 45:
+		if em <= 45 {
+			if em == 45 && es > 0 {
+				return fmt.Sprintf("45+%d", es)
+			}
+			return fmt.Sprintf("%d:%02d", em, es)
 		}
-		return fmt.Sprintf("%d:%02d", em, es)
-	case em < 60:
 		return "HT"
-	case em <= 90:
-		if em == 90 && es > 0 {
-			return fmt.Sprintf("90+%d", es)
+	case minute < 60:
+		return "HT"
+	case minute <= 90:
+		if em <= 90 {
+			if em == 90 && es > 0 {
+				return fmt.Sprintf("90+%d", es)
+			}
+			return fmt.Sprintf("%d:%02d", em, es)
 		}
-		return fmt.Sprintf("%d:%02d", em, es)
+		return fmt.Sprintf("90+%d", em-90)
 	case em <= 105:
 		if em == 105 && es > 0 {
 			return fmt.Sprintf("105+%d", es)
 		}
-		return fmt.Sprintf("%d", em)
+		return fmt.Sprintf("ET %d:%02d", em-90, es)
 	case em <= 120:
 		if em == 120 && es > 0 {
 			return fmt.Sprintf("120+%d", es)
 		}
-		return fmt.Sprintf("%d", em)
+		return fmt.Sprintf("ET %d:%02d", em-105, es)
 	default:
-		return fmt.Sprintf("%d", em)
+		return "FT"
 	}
 }
 
