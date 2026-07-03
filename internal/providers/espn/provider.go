@@ -447,6 +447,10 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 		hash[key] = true
 	}
 
+	// Track the last delay type so end-delay knows if it follows an injury
+	var lastDelayType domain.EventType
+	delayTypeAtMinute := make(map[int]domain.EventType)
+
 	for _, ke := range data.Summary.KeyEvents {
 		typ := classify(ke)
 		if typ == "" {
@@ -457,22 +461,42 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 		}
 		minute, added := parseClock(ke.Clock.DisplayValue)
 
+		if ke.Type.Type == "start-delay" {
+			// Use consistent type for same-minute start-delay (paired team events)
+			if t, ok := delayTypeAtMinute[minute]; ok {
+				typ = t
+			} else {
+				if containsStr(strings.ToLower(ke.Text), "injury") {
+					typ = domain.EvInjury
+				}
+				delayTypeAtMinute[minute] = typ
+			}
+			lastDelayType = typ
+		}
+
+		// Dedup by minute:type — same-minute same-type events are the same incident
 		key := fmt.Sprintf("%d:%d:%s", minute, added, string(typ))
 		if hash[key] {
 			continue
-		}
-
-		var teamSide string
-		if ke.Team != nil {
-			teamSide = ke.Team.DisplayName
 		}
 
 		desc := ke.Text
 		if desc == "" {
 			desc = typeLabel(typ)
 		}
-		if teamSide != "" && !stringsContains(desc, teamSide) {
-			desc = teamSide + " — " + desc
+		switch typ {
+		case domain.EvPausa:
+			if !strings.Contains(desc, "drinks break") {
+				desc = "Pausa de hidratación"
+			}
+		case domain.EvInjury:
+			// Keep original text; it already describes the injury
+		case domain.EvContinua:
+			if lastDelayType == domain.EvInjury {
+				desc = "Se reanuda después de lesión"
+			} else {
+				desc = "Se reanuda después de pausa de hidratación"
+			}
 		}
 
 		period := ke.Period.Number
@@ -580,6 +604,9 @@ func classify(ke oldESPN.KeyEvent) domain.EventType {
 	case "start-2nd-half":
 		return domain.EvS2
 	case "start-delay":
+		if ke.Text != "" && containsStr(strings.ToLower(ke.Text), "injury") {
+			return domain.EvInjury
+		}
 		return domain.EvPausa
 	case "end-delay":
 		return domain.EvContinua
@@ -624,6 +651,8 @@ func typeLabel(typ domain.EventType) string {
 		return "Inicio 2do tiempo"
 	case domain.EvPausa:
 		return "Pausa"
+	case domain.EvInjury:
+		return "Lesión"
 	case domain.EvContinua:
 		return "Se reanuda"
 	case domain.EvHT:
@@ -647,10 +676,6 @@ func normalizeESPNVal(name, val string) string {
 		}
 	}
 	return val
-}
-
-func stringsContains(s, substr string) bool {
-	return len(s) >= len(substr) && containsStr(s, substr)
 }
 
 func containsStr(s, substr string) bool {

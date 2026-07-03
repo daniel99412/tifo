@@ -311,6 +311,12 @@ func (md MatchDetail) eventDesc(ev EventItem) string {
 
 	case "Continúa":
 		parts = append(parts, mdGoalStyle.Render("▶"))
+		parts = append(parts, " ")
+		if ev.Detail != "" {
+			parts = append(parts, ev.Detail)
+		} else {
+			parts = append(parts, "Se reanuda")
+		}
 
 	default:
 		if ev.Player != "" {
