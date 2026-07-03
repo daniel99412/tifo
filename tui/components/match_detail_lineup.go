@@ -7,6 +7,71 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+var (
+	capStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("51"))
+	subOutStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	subInStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
+	yellowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	redStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+)
+
+func indicatorVisualWidth(p PlayerLineup) int {
+	parts := 0
+	runes := 0
+	if p.IsCaptain {
+		parts++
+		runes++
+	}
+	if p.SubOut {
+		parts++
+		runes++
+	}
+	if p.SubIn {
+		parts++
+		runes++
+	}
+	switch p.CardType {
+	case "Yellow":
+		parts++
+		runes++
+	case "Red":
+		parts++
+		runes++
+	case "SecondYellow":
+		parts++
+		runes += 3
+	}
+	if parts <= 1 {
+		return runes
+	}
+	return runes + parts - 1
+}
+
+func (md MatchDetail) playerIndicator(p PlayerLineup) string {
+	var parts []string
+	if p.IsCaptain {
+		parts = append(parts, capStyle.Render("C"))
+	}
+	if p.SubOut {
+		parts = append(parts, subOutStyle.Render("↓"))
+	}
+	if p.SubIn {
+		parts = append(parts, subInStyle.Render("↑"))
+	}
+	switch p.CardType {
+	case "Yellow":
+		parts = append(parts, yellowStyle.Render("!"))
+	case "Red":
+		parts = append(parts, redStyle.Render("R"))
+	case "SecondYellow":
+		parts = append(parts, yellowStyle.Render("!")+yellowStyle.Render("!")+redStyle.Render("R"))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " ")
+}
+
 func (md *MatchDetail) renderLineup(width, height int) string {
 	if md.Details == nil {
 		return mdInfoStyle.Render("sin alineaciones")
@@ -14,9 +79,9 @@ func (md *MatchDetail) renderLineup(width, height int) string {
 
 	lu := md.Details.Lineup
 
-	homeW := width * 20 / 100
-	centerW := width * 60 / 100
-	awayW := width * 20 / 100
+	homeW := width * 30 / 100
+	centerW := width * 40 / 100
+	awayW := width * 30 / 100
 	if homeW < 10 {
 		homeW = 10
 	}
@@ -76,7 +141,23 @@ func (md MatchDetail) teamColumn(formation, coach string, starters, subs []Playe
 			posW = len(p.PosName)
 		}
 	}
+
+	actionW := 0
+	for _, p := range starters {
+		if w := indicatorVisualWidth(p); w > actionW {
+			actionW = w
+		}
+	}
+	for _, p := range subs {
+		if w := indicatorVisualWidth(p); w > actionW {
+			actionW = w
+		}
+	}
+
 	nameW := colW - 8 - posW
+	if actionW > 0 {
+		nameW = colW - 10 - posW - actionW
+	}
 	if nameW < 3 {
 		nameW = 3
 	}
@@ -86,9 +167,15 @@ func (md MatchDetail) teamColumn(formation, coach string, starters, subs []Playe
 	lines = append(lines, "")
 
 	for _, p := range starters {
-		line := lipgloss.NewStyle().Width(colW).
-			Foreground(lipgloss.Color("255")).Render(fmt.Sprintf("  %2s  %-*s  %-*s", p.Number, nameW, p.Name, posW, p.PosName))
-		lines = append(lines, line)
+		line := fmt.Sprintf("  %2s  %-*s  %-*s", p.Number, nameW, p.Name, posW, p.PosName)
+		if actionW > 0 {
+			indicator := md.playerIndicator(p)
+			if vw := indicatorVisualWidth(p); vw < actionW {
+				indicator += strings.Repeat(" ", actionW-vw)
+			}
+			line += "  " + indicator
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(colW).Foreground(lipgloss.Color("255")).Render(line))
 	}
 
 	lines = append(lines, "")
@@ -102,9 +189,15 @@ func (md MatchDetail) teamColumn(formation, coach string, starters, subs []Playe
 	lines = append(lines, "")
 
 	for _, p := range subs {
-		line := lipgloss.NewStyle().Width(colW).
-			Foreground(lipgloss.Color("240")).Render(fmt.Sprintf("  %2s  %-*s  %-*s", p.Number, nameW, p.Name, posW, p.PosName))
-		lines = append(lines, line)
+		line := fmt.Sprintf("  %2s  %-*s  %-*s", p.Number, nameW, p.Name, posW, p.PosName)
+		if actionW > 0 {
+			indicator := md.playerIndicator(p)
+			if vw := indicatorVisualWidth(p); vw < actionW {
+				indicator += strings.Repeat(" ", actionW-vw)
+			}
+			line += "  " + indicator
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(colW).Foreground(lipgloss.Color("240")).Render(line))
 	}
 
 	return lines

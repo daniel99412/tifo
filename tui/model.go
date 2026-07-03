@@ -1053,8 +1053,47 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 			HomeCoach:     d.Lineups.HomeCoach,
 			AwayCoach:     d.Lineups.AwayCoach,
 		}
+		// Build indicator map from events: player name -> extra info
+		type playerExtra struct {
+			subOut   bool
+			subIn    bool
+			cardType string
+		}
+		extra := make(map[string]playerExtra)
+		for _, ev := range d.Events {
+			switch ev.EventType {
+			case domain.EvSubstitution:
+				if ev.SubOut != nil {
+					x := extra[ev.SubOut.Name]
+					x.subOut = true
+					extra[ev.SubOut.Name] = x
+				}
+				if ev.SubIn != nil {
+					x := extra[ev.SubIn.Name]
+					x.subIn = true
+					extra[ev.SubIn.Name] = x
+				}
+			case domain.EvCard:
+				if ev.Player != nil && ev.CardType != "" {
+					x := extra[ev.Player.Name]
+					x.cardType = ev.CardType
+					extra[ev.Player.Name] = x
+				}
+			}
+		}
 		mapPlayer := func(p domain.PlayerRef) components.PlayerLineup {
-			return components.PlayerLineup{Name: p.Name, Number: p.Number, PosName: posAbbr(p.PosID, p.PosName)}
+			pl := components.PlayerLineup{
+				Name:      p.Name,
+				Number:    p.Number,
+				PosName:   posAbbr(p.PosID, p.PosName),
+				IsCaptain: p.IsCaptain,
+			}
+			if x, ok := extra[p.Name]; ok {
+				pl.SubOut = x.subOut
+				pl.SubIn = x.subIn
+				pl.CardType = x.cardType
+			}
+			return pl
 		}
 		sortByPos := func(ps []domain.PlayerRef) []components.PlayerLineup {
 			sorted := make([]domain.PlayerRef, len(ps))

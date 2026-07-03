@@ -140,9 +140,13 @@ type LineupData struct {
 }
 
 type PlayerLineup struct {
-	Name    string
-	Number  string
-	PosName string
+	Name      string
+	Number    string
+	PosName   string
+	IsCaptain bool
+	SubOut    bool
+	SubIn     bool
+	CardType  string
 }
 
 type EventData struct {

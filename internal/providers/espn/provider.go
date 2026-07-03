@@ -215,7 +215,7 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 			temp = data.Summary.GameInfo.Weather.High
 		}
 		if temp > 0 {
-			w = fmt.Sprintf("%s, %d°C", w, temp)
+			w = fmt.Sprintf("%s, %.0f°C", w, temp)
 		}
 		out.ExtraInfo.Weather = w
 	}

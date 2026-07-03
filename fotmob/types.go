@@ -203,13 +203,13 @@ type RefereeInfo struct {
 }
 
 type WeatherInfo struct {
-	Temperature           int    `json:"temperature"`
-	WindSpeed             int    `json:"windSpeed"`
-	WindDirectionCardinal string `json:"windDirectionCardinal"`
-	RelativeHumidity      int    `json:"relativeHumidity"`
-	Precipitation         int    `json:"precipitation"`
-	Description           string `json:"description"`
-	DefaultTitle          string `json:"defaultTitle"`
+	Temperature           float64 `json:"temperature"`
+	WindSpeed             float64 `json:"windSpeed"`
+	WindDirectionCardinal string  `json:"windDirectionCardinal"`
+	RelativeHumidity      float64 `json:"relativeHumidity"`
+	Precipitation         float64 `json:"precipitation"`
+	Description           string  `json:"description"`
+	DefaultTitle          string  `json:"defaultTitle"`
 }
 
 type MatchEvent struct {
@@ -320,6 +320,7 @@ type LineupPlayer struct {
 	PositionID  int    `json:"positionId"`
 	Position    string `json:"position,omitempty"`
 	Role        string `json:"role,omitempty"`
+	IsCaptain   bool   `json:"isCaptain"`
 }
 
 type H2HData struct {

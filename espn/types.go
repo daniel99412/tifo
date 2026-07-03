@@ -135,14 +135,14 @@ type Official struct {
 }
 
 type Weather struct {
-	Temperature   int    `json:"temperature"`
-	Condition     string `json:"condition"`
-	High          int    `json:"high"`
-	Low           int    `json:"low"`
-	Humidity      int    `json:"humidity"`
-	WindSpeed     int    `json:"windSpeed"`
-	WindDirection string `json:"windDirection"`
-	DisplayValue  string `json:"displayValue"`
+	Temperature   float64 `json:"temperature"`
+	Condition     string  `json:"condition"`
+	High          float64 `json:"high"`
+	Low           float64 `json:"low"`
+	Humidity      float64 `json:"humidity"`
+	WindSpeed     float64 `json:"windSpeed"`
+	WindDirection string  `json:"windDirection"`
+	DisplayValue  string  `json:"displayValue"`
 }
 
 type KeyEvent struct {

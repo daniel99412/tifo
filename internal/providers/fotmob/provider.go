@@ -183,7 +183,7 @@ func (p *Provider) mapMatchDetails(d *oldFotmob.MatchDetailsResponse) (*domain.M
 	if w := d.Content.Weather; w.Description != "" {
 		weather := w.Description
 		if w.Temperature > 0 {
-			weather = fmt.Sprintf("%s, %d°C", weather, w.Temperature)
+			weather = fmt.Sprintf("%s, %.0f°C", weather, w.Temperature)
 		}
 		md.ExtraInfo.Weather = weather
 	}
@@ -264,22 +264,22 @@ func (p *Provider) mapLineups(d *oldFotmob.MatchDetailsResponse) *domain.Lineups
 	for _, p := range d.Content.Lineup.HomeTeam.Starters {
 		posName := p.Position
 		if posName == "" { posName = p.Role }
-		lu.HomeStarters = append(lu.HomeStarters, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName})
+		lu.HomeStarters = append(lu.HomeStarters, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName, IsCaptain: p.IsCaptain})
 	}
 	for _, p := range d.Content.Lineup.HomeTeam.Subs {
 		posName := p.Position
 		if posName == "" { posName = p.Role }
-		lu.HomeSubs = append(lu.HomeSubs, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName})
+		lu.HomeSubs = append(lu.HomeSubs, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName, IsCaptain: p.IsCaptain})
 	}
 	for _, p := range d.Content.Lineup.AwayTeam.Starters {
 		posName := p.Position
 		if posName == "" { posName = p.Role }
-		lu.AwayStarters = append(lu.AwayStarters, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName})
+		lu.AwayStarters = append(lu.AwayStarters, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName, IsCaptain: p.IsCaptain})
 	}
 	for _, p := range d.Content.Lineup.AwayTeam.Subs {
 		posName := p.Position
 		if posName == "" { posName = p.Role }
-		lu.AwaySubs = append(lu.AwaySubs, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName})
+		lu.AwaySubs = append(lu.AwaySubs, domain.PlayerRef{Name: p.Name, Number: p.ShirtNumber, PosID: p.PositionID, PosName: posName, IsCaptain: p.IsCaptain})
 	}
 	return lu
 }
