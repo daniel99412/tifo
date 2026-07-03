@@ -194,10 +194,14 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 		} else if city != "" {
 			out.ExtraInfo.Venue = fmt.Sprintf("%s, %s", data.Summary.GameInfo.Venue.FullName, city)
 		}
-		out.ExtraInfo.VenueCapacity = data.Summary.GameInfo.Venue.Capacity
+		if data.Summary.GameInfo.Venue.Capacity > 0 {
+			out.ExtraInfo.VenueCapacity = data.Summary.GameInfo.Venue.Capacity
+		}
 	}
 
-	out.ExtraInfo.Attendance = data.Summary.GameInfo.Attendance
+	if data.Summary.GameInfo.Attendance > 0 {
+		out.ExtraInfo.Attendance = data.Summary.GameInfo.Attendance
+	}
 
 	for _, off := range data.Summary.GameInfo.Officials {
 		if off.Position.ID == "1" {

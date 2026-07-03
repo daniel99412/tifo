@@ -449,7 +449,26 @@ func (md *MatchDetail) Render(width, height int) string {
 			lines = append(lines, mdInfoStyle.Render(venueLine))
 		}
 		if info.Attendance > 0 {
-			lines = append(lines, mdInfoStyle.Render(fmt.Sprintf("Asistencia: %d", info.Attendance)))
+			attLine := fmt.Sprintf("Asistencia: %d", info.Attendance)
+			if info.VenueCapacity > 0 {
+				pct := float64(info.Attendance) / float64(info.VenueCapacity) * 100
+				const barW = 12
+				filled := int(pct * barW / 100)
+				if filled > barW {
+					filled = barW
+				}
+				bar := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
+				switch {
+				case pct >= 80:
+					bar = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render(bar)
+				case pct >= 50:
+					bar = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render(bar)
+				default:
+					bar = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(bar)
+				}
+				attLine = fmt.Sprintf("Asistencia: %d  %s  %.0f%% de %d", info.Attendance, bar, pct, info.VenueCapacity)
+			}
+			lines = append(lines, mdInfoStyle.Render(attLine))
 		}
 		if info.Referee != "" {
 			lines = append(lines, mdInfoStyle.Render(fmt.Sprintf("Árbitro: %s", info.Referee)))
