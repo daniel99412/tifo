@@ -50,9 +50,6 @@ var (
 			PaddingRight(1).
 			Foreground(lipgloss.Color("255"))
 
-	matchTimeStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
-
 	matchScoreStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("255"))
@@ -72,12 +69,6 @@ var (
 
 	vsStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("240"))
-
-	liveIndicatorStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("196"))
-
-	liveMinuteStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("215"))
 )
 
 const dataRefreshInterval = 5 * time.Second
@@ -491,24 +482,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-				// Update Status.Detail from live minute / events
-				detail := ""
-				if lm := msg.details.Match.LiveMinute; lm > 45 {
-					detail = fmt.Sprintf("%d'", lm)
-				} else {
-					for _, ev := range msg.details.Events {
-						if ev.EventType == domain.EvHalf && ev.HalfStr == "HT" {
-							detail = "HT"
-							break
-						}
-					}
-					if detail == "" && lm > 0 {
-						detail = fmt.Sprintf("%d'", lm)
+				// Build Status.Detail and sync state for the selected match.
+				isSelected := m.selectedMatch == &m.matches[i]
+
+				var detail string
+				for _, ev := range msg.details.Events {
+					if ev.EventType == domain.EvHalf && ev.HalfStr == "HT" {
+						detail = "HT"
+						break
 					}
 				}
+
+				if detail == "" {
+					if lm := msg.details.Match.LiveMinute; lm > 0 {
+						if isSelected {
+							// Selected match: sync the renderTick clock, don't write Status.Detail
+							// (renderTick writes it every 1s with seconds precision)
+							if lm != m.detailMinute {
+								m.detailMinute = lm
+								m.detailUpdated = time.Now()
+								log.Printf("[clock] sync selected match %s to minute %d", detailFotmobID, lm)
+							}
+						} else {
+							detail = fmt.Sprintf("%d'", lm)
+						}
+					}
+				}
+
 				if detail != "" {
 					m.matches[i].Status.Detail = detail
-					log.Printf("[batch] updated match %s detail=%q", detailFotmobID, detail)
 				}
 
 				// If overall selectedMatch ref is stale, re-point it.
@@ -625,10 +627,10 @@ if msg.details.Match.Score != "" {
 			if isMatchLive(*m.selectedMatch) {
 				if m.detailMinute > 0 && !m.detailUpdated.IsZero() {
 					m.detailView.Minute = computeMatchMinuteFromEvents(m.selectedMatch.Status.Kickoff, m.detailUpdated, m.detailMinute, m.selectedMatch.Status.FirstHalfAddedTime)
-					m.selectedMatch.Status.Detail = m.detailView.Minute
 				} else {
 					m.detailView.Minute = computeMatchMinute(m.selectedMatch.Status.Kickoff, m.selectedMatch.Status.FirstHalfAddedTime)
 				}
+				m.selectedMatch.Status.Detail = m.detailView.Minute
 				if m.matchDetails != nil && isHalfTime(m.matchDetails.Events) && m.detailMinute <= 45 {
 					m.detailView.Minute = "HT"
 					m.selectedMatch.Status.Detail = "HT"
@@ -1495,25 +1497,21 @@ func formatMatch(m domain.Match) string {
 		timeStr = ko.In(time.Local).Format("15:04")
 	}
 
-	// Col 1: live indicator
-	var col1 string
-	if isMatchLive(m) {
-		col1 = liveIndicatorStyle.Render("●")
-	} else {
-		col1 = " "
+	live := isMatchLive(m)
+
+	// Resolve minute for live matches
+	minute := m.Status.Detail
+	if live && (minute == "" || minute == "En vivo") {
+		minute = computeMatchMinute(ko, m.Status.FirstHalfAddedTime)
 	}
 
-	// Col 2: time / minute
-	var col2 string
-	if isMatchLive(m) {
-		minute := m.Status.Detail
-		if minute == "" || minute == "En vivo" {
-			minute = computeMatchMinute(ko, m.Status.FirstHalfAddedTime)
-		}
-		col2 = liveMinuteStyle.Render(minute)
-	} else {
-		col2 = matchTimeStyle.Render(timeStr)
-	}
+	cp := components.BuildClockParts(components.MatchClockData{
+		Minute:       minute,
+		IsLive:       live,
+		IsFinished:   isMatchFinished(m, nil),
+		Period:       m.Status.Period,
+		HasPenalties: m.HomePenScore != nil && m.AwayPenScore != nil,
+	}, timeStr)
 
 	const c1W = 2
 	const c2W = 6
@@ -1522,43 +1520,17 @@ func formatMatch(m domain.Match) string {
 	const c5W = 25
 	const c6W = 5
 
-	// Col 3: home team
 	col3 := matchStyle.Render(truncate(m.Home.Name, c3W))
-
-	// Col 4: vs (always)
 	col4 := vsStyle.Render("vs")
-
-	// Col 5: away team
 	col5 := matchStyle.Render(truncate(m.Away.Name, c5W))
-
-	// Col 6: info extra (FT / HT / ET / PEN / minute)
-	var col6 string
-	if m.HomePenScore != nil && m.AwayPenScore != nil {
-		col6 = matchScoreStyle.Render("PEN")
-	} else if m.Status.State == domain.MatchFinished {
-		if m.Status.Period >= domain.PeriodETFirstHalf {
-			col6 = matchScoreStyle.Render("ET")
-		} else {
-			col6 = matchScoreStyle.Render("FT")
-		}
-	} else if isMatchLive(m) {
-		d := m.Status.Detail
-		if d == "HT" || d == "Descanso" {
-			col6 = matchScoreStyle.Render("HT")
-		} else {
-			col6 = matchStyle.Render(d)
-		}
-	}
-
-	// Col 7: score + penalties
 	col7 := formatPenScore(m)
 
-	return padRight(col1, c1W) +
-		padRight(col2, c2W) +
+	return padRight(cp.Indicator, c1W) +
+		padRight(cp.Time, c2W) +
 		padRight(col3, c3W) +
 		padCenter(col4, c4W) +
 		padRight(col5, c5W) +
-		padRight(col6, c6W) +
+		padRight(cp.Status, c6W) +
 		col7
 }
 

@@ -74,11 +74,7 @@ var (
 			Width(5).
 			Foreground(lipgloss.Color("240"))
 
-	mdLiveIndicatorStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("196"))
 
-	mdLiveMinuteStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("215"))
 )
 
 type MatchDetail struct {
@@ -416,21 +412,10 @@ func (md *MatchDetail) Render(width, height int) string {
 	)
 	lines = append(lines, matchup)
 
-	if md.Minute != "" {
-		minuteStr := md.Minute
-		if md.WaterBreak {
-			minuteStr += " H2O"
-		}
-		lines = append(lines, fmt.Sprintf("  %s %s",
-			mdLiveIndicatorStyle.Render("●"),
-			mdLiveMinuteStyle.Render(minuteStr)))
-	} else {
-		statusLabel := md.Status
-		if statusLabel == "" {
-			statusLabel = "programado"
-		}
-		lines = append(lines, mdInfoStyle.Render(statusLabel))
-	}
+	lines = append(lines, "  "+RenderClockWithLabel(MatchClockData{
+		Minute:     md.Minute,
+		WaterBreak: md.WaterBreak,
+	}, md.Status))
 	lines = append(lines, mdInfoStyle.Render(md.DateTime))
 
 	if md.Details != nil && md.Details.Events.ExtraInfo != nil {
