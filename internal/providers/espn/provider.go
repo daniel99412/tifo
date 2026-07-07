@@ -472,6 +472,8 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 				delayTypeAtMinute[minute] = typ
 			}
 			lastDelayType = typ
+		} else if typ == domain.EvVAR || typ == domain.EvVideoReview {
+			lastDelayType = typ
 		}
 
 		// Dedup by minute:type — same-minute same-type events are the same incident
@@ -492,9 +494,12 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 		case domain.EvInjury:
 			// Keep original text; it already describes the injury
 		case domain.EvContinua:
-			if lastDelayType == domain.EvInjury {
+			switch lastDelayType {
+			case domain.EvInjury:
 				desc = "Se reanuda después de lesión"
-			} else {
+			case domain.EvVAR, domain.EvVideoReview:
+				desc = "Se reanuda después de revisión VAR"
+			default:
 				desc = "Se reanuda después de pausa de hidratación"
 			}
 		}
@@ -604,10 +609,17 @@ func classify(ke oldESPN.KeyEvent) domain.EventType {
 	case "start-2nd-half":
 		return domain.EvS2
 	case "start-delay":
-		if ke.Text != "" && containsStr(strings.ToLower(ke.Text), "injury") {
+		text := strings.ToLower(ke.Text)
+		switch {
+		case containsStr(text, "injury"):
 			return domain.EvInjury
+		case containsStr(text, "drink") || containsStr(text, "hydration") || containsStr(text, "agua"):
+			return domain.EvPausa
+		case text == "" || containsStr(text, "var") || containsStr(text, "video"):
+			return domain.EvVideoReview
+		default:
+			return domain.EvPausa
 		}
-		return domain.EvPausa
 	case "end-delay":
 		return domain.EvContinua
 	case "start-extra-time":

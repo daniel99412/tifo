@@ -27,11 +27,11 @@ type LiveTime struct {
 }
 
 type FotmobReason struct {
-	Short     string `json:"short"`
-	ShortKey  string `json:"shortKey"`
-	Long      string `json:"long"`
-	LongKey   string `json:"longKey"`
-	Penalties []int  `json:"penalties"`
+	Short     string      `json:"short"`
+	ShortKey  string      `json:"shortKey"`
+	Long      string      `json:"long"`
+	LongKey   string      `json:"longKey"`
+	Penalties interface{} `json:"penalties"`
 }
 
 type Halfs struct {

@@ -195,11 +195,12 @@ func (p *Provider) mapMatchDetails(d *oldFotmob.MatchDetailsResponse) (*domain.M
 	if d.Header.Status.Reason != nil {
 		log.Printf("[fotmob] Reason found: short=%q long=%q penalties=%v",
 			d.Header.Status.Reason.Short, d.Header.Status.Reason.Long, d.Header.Status.Reason.Penalties)
-		if len(d.Header.Status.Reason.Penalties) == 2 {
-			md.Match.PenScore = fmt.Sprintf("%d-%d", d.Header.Status.Reason.Penalties[0], d.Header.Status.Reason.Penalties[1])
+		penalties := toIntSlice(d.Header.Status.Reason.Penalties)
+		if len(penalties) == 2 {
+			md.Match.PenScore = fmt.Sprintf("%d-%d", penalties[0], penalties[1])
 			log.Printf("[fotmob] PenScore set to %q", md.Match.PenScore)
 		} else {
-			log.Printf("[fotmob] Reason.Penalties unexpected length: %d", len(d.Header.Status.Reason.Penalties))
+			log.Printf("[fotmob] Reason.Penalties unexpected length: %d (raw=%v)", len(penalties), d.Header.Status.Reason.Penalties)
 		}
 	} else {
 		log.Printf("[fotmob] No Reason in header.status (reason field may not exist in response)")
@@ -864,6 +865,21 @@ func (p *Provider) mapTeamForm(d *oldFotmob.MatchDetailsResponse) (homeForm, awa
 		}
 	}
 	return
+}
+
+func toIntSlice(v interface{}) []int {
+	switch vv := v.(type) {
+	case []interface{}:
+		out := make([]int, 0, len(vv))
+		for _, x := range vv {
+			switch n := x.(type) {
+			case float64:
+				out = append(out, int(n))
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 

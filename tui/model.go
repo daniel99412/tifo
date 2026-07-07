@@ -13,6 +13,7 @@ import (
 	"tifo/internal/providers"
 	espnProvider "tifo/internal/providers/espn"
 	fotmobProvider "tifo/internal/providers/fotmob"
+	sofascoreProvider "tifo/internal/providers/sofascore"
 	"tifo/internal/resolver"
 	"tifo/internal/services"
 	"tifo/ipapi"
@@ -143,8 +144,9 @@ func buildService() *services.MatchService {
 
 	fp := fotmobProvider.NewProvider(oldFotmob, mr, tr, cr)
 	ep := espnProvider.NewProvider(oldESPN)
+	sp := sofascoreProvider.NewProvider()
 
-	return services.NewMatchService(fp, []providers.Provider{ep})
+	return services.NewMatchService(fp, []providers.Provider{ep, sp})
 }
 
 func (m Model) Init() tea.Cmd {
@@ -300,7 +302,7 @@ func (m *Model) selectMatch(idx int, matches []domain.Match) []tea.Cmd {
 		formatTime(selMatch.Status),
 		"",
 	)
-	if isMatchLive(*selMatch) {
+	if isMatchLive(*selMatch, nil) {
 		minute := selMatch.Status.Detail
 		if minute == "" || minute == "En vivo" {
 			minute = computeMatchMinute(selMatch.Status.Kickoff, selMatch.Status.FirstHalfAddedTime)
@@ -513,6 +515,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.matches[i].Status.Detail = detail
 				}
 
+				// Propagate finished state to the match list entry so the list
+				// clock (which only has the Match struct, not Events) sees it.
+				if isMatchFinished(m.matches[i], msg.details.Events) {
+					m.matches[i].Status.State = domain.MatchFinished
+				}
+
 				// If overall selectedMatch ref is stale, re-point it.
 					if m.selectedMatch != nil {
 						if sid, ok := m.selectedMatch.ExternalIDs.Get("fotmob"); ok && sid == detailFotmobID {
@@ -624,16 +632,20 @@ if msg.details.Match.Score != "" {
 	case renderTickMsg:
 		// Refresh UI-only state (clock, score from local snapshot) every 1s
 		if m.selectedMatch != nil && m.detailView != nil {
-			if isMatchLive(*m.selectedMatch) {
-				if m.detailMinute > 0 && !m.detailUpdated.IsZero() {
-					m.detailView.Minute = computeMatchMinuteFromEvents(m.selectedMatch.Status.Kickoff, m.detailUpdated, m.detailMinute, m.selectedMatch.Status.FirstHalfAddedTime)
-				} else {
-					m.detailView.Minute = computeMatchMinute(m.selectedMatch.Status.Kickoff, m.selectedMatch.Status.FirstHalfAddedTime)
-				}
-				m.selectedMatch.Status.Detail = m.detailView.Minute
-				if m.matchDetails != nil && isHalfTime(m.matchDetails.Events) && m.detailMinute <= 45 {
+			var liveEvents []domain.MatchEvent
+			if m.matchDetails != nil {
+				liveEvents = m.matchDetails.Events
+			}
+			if isMatchLive(*m.selectedMatch, liveEvents) {
+				if m.matchDetails != nil && isHalfTime(m.matchDetails.Events) {
 					m.detailView.Minute = "HT"
 					m.selectedMatch.Status.Detail = "HT"
+				} else if m.detailMinute > 0 && !m.detailUpdated.IsZero() {
+					m.detailView.Minute = computeMatchMinuteFromEvents(m.selectedMatch.Status.Kickoff, m.detailUpdated, m.detailMinute, m.selectedMatch.Status.FirstHalfAddedTime)
+					m.selectedMatch.Status.Detail = m.detailView.Minute
+				} else {
+					m.detailView.Minute = computeMatchMinute(m.selectedMatch.Status.Kickoff, m.selectedMatch.Status.FirstHalfAddedTime)
+					m.selectedMatch.Status.Detail = m.detailView.Minute
 				}
 			if m.selectedMatch.HomeScore != nil && m.selectedMatch.AwayScore != nil {
 				m.detailView.Score = fmt.Sprintf("%d-%d", *m.selectedMatch.HomeScore, *m.selectedMatch.AwayScore)
@@ -676,7 +688,11 @@ if msg.details.Match.Score != "" {
 		}
 
 		// Auto-refresh match details when in detail view on a live match
-		if m.selectedMatch != nil && !m.loadingDetail && isMatchLive(*m.selectedMatch) {
+		var tickEvents []domain.MatchEvent
+		if m.matchDetails != nil {
+			tickEvents = m.matchDetails.Events
+		}
+		if m.selectedMatch != nil && !m.loadingDetail && isMatchLive(*m.selectedMatch, tickEvents) {
 			if id, ok := m.selectedMatch.ExternalIDs.Get("fotmob"); ok {
 				ctx := services.MatchContext{}
 				if sel := m.leftList.Selected(); sel != nil {
@@ -1302,8 +1318,8 @@ func isMatchFinished(m domain.Match, events []domain.MatchEvent) bool {
 	return false
 }
 
-func isMatchLive(m domain.Match) bool {
-	if isMatchFinished(m, nil) {
+func isMatchLive(m domain.Match, events []domain.MatchEvent) bool {
+	if isMatchFinished(m, events) {
 		return false
 	}
 	return m.Status.State == domain.MatchLive
@@ -1322,7 +1338,7 @@ func computeMatchMinute(ko time.Time, added int) string {
 		return fmt.Sprintf("%d:%02d", em, es)
 	case em < 48:
 		return fmt.Sprintf("45+%d", es)
-	case em < 60+added:
+	case em < 45+15+added:
 		return "HT"
 	case em < 90+15+added:
 		sm := em - 15 - added
@@ -1361,16 +1377,22 @@ func computeMatchMinuteFromEvents(ko, lastUpdate time.Time, minute int, added in
 			return fmt.Sprintf("%d:%02d", em, es)
 		}
 		return fmt.Sprintf("90+%d", em-90)
-	case em <= 105:
-		if em == 105 && es > 0 {
-			return fmt.Sprintf("105+%d", es)
+	case minute <= 105:
+		if em <= 105 {
+			if em == 105 && es > 0 {
+				return fmt.Sprintf("105+%d", es)
+			}
+			return fmt.Sprintf("ET %d:%02d", em-90, es)
 		}
-		return fmt.Sprintf("ET %d:%02d", em-90, es)
-	case em <= 120:
-		if em == 120 && es > 0 {
-			return fmt.Sprintf("120+%d", es)
+		return fmt.Sprintf("105+%d", em-105)
+	case minute <= 120:
+		if em <= 120 {
+			if em == 120 && es > 0 {
+				return fmt.Sprintf("120+%d", es)
+			}
+			return fmt.Sprintf("ET %d:%02d", em-90, es)
 		}
-		return fmt.Sprintf("ET %d:%02d", em-105, es)
+		return fmt.Sprintf("120+%d", em-120)
 	default:
 		return "FT"
 	}
@@ -1497,11 +1519,11 @@ func formatMatch(m domain.Match) string {
 		timeStr = ko.In(time.Local).Format("15:04")
 	}
 
-	live := isMatchLive(m)
+	live := isMatchLive(m, nil)
 
 	// Resolve minute for live matches
 	minute := m.Status.Detail
-	if live && (minute == "" || minute == "En vivo") {
+	if live && (minute == "" || minute == "En vivo" || minute == "0'" || minute == "0:00") {
 		minute = computeMatchMinute(ko, m.Status.FirstHalfAddedTime)
 	}
 
@@ -1551,7 +1573,7 @@ func formatPenScore(m domain.Match) string {
 			*m.HomeScore, *m.AwayScore, m.Home.Name, m.HomePenScore, m.AwayPenScore)
 		return matchScoreStyle.Render(fmt.Sprintf("%d : %d", *m.HomeScore, *m.AwayScore))
 	}
-	if isMatchLive(m) {
+	if isMatchLive(m, nil) {
 		log.Printf("[score] live match %q %q state=%s scoreStr=%q homeScore=%v awayScore=%v",
 			m.Home.Name, m.Away.Name, m.Status.State, m.Status.ScoreStr,
 			m.HomeScore, m.AwayScore)
