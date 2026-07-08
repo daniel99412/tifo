@@ -441,15 +441,10 @@ func teamMatch(a, b string) bool {
 }
 
 func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.MatchEvent, homeTeam, awayTeam string) []domain.MatchEvent {
-	hash := make(map[string]bool)
-	for _, ev := range existing {
-		key := fmt.Sprintf("%d:%d:%s", ev.Minute, ev.SortOverload, string(ev.EventType))
-		hash[key] = true
-	}
-
 	// Track the last delay type so end-delay knows if it follows an injury
 	var lastDelayType domain.EventType
 	delayTypeAtMinute := make(map[int]domain.EventType)
+	espnCreated := make(map[string]bool) // track events created by ESPN in this pass
 
 	for _, ke := range data.Summary.KeyEvents {
 		typ := classify(ke)
@@ -460,6 +455,9 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 			log.Printf("[espn] VAR event detected: type=%q text=%q shortText=%q", ke.Type.Type, ke.Text, ke.ShortText)
 		}
 		minute, added := parseClock(ke.Clock.DisplayValue)
+
+		// Determine if this is a matchable type (provider-shared) or unique ESPN type
+		isMatchable := isMatchableType(ke.Type.Type, typ)
 
 		if ke.Type.Type == "start-delay" {
 			// Use consistent type for same-minute start-delay (paired team events)
@@ -476,23 +474,94 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 			lastDelayType = typ
 		}
 
-		// Dedup by minute:type — same-minute same-type events are the same incident
-		key := fmt.Sprintf("%d:%d:%s", minute, added, string(typ))
-		if hash[key] {
-			continue
-		}
-
+		// Build candidate event
 		desc := ke.Text
 		if desc == "" {
 			desc = typeLabel(typ)
 		}
+		pauseType := classifyPauseType(ke)
+
+		// Empty-text start-delay at minute 0 is pre-match delay, not VAR
+		if typ == domain.EvPausa && pauseType == "var" {
+			pauseType = "other"
+		}
+
+		ev := domain.MatchEvent{
+			Minute:       minute,
+			AddedTime:    added,
+			EventType:    typ,
+			Period:       ke.Period.Number,
+			Detail:       desc,
+			SortTime:     minute,
+			SortOverload: added,
+			PauseType:    pauseType,
+			DelayText:    ke.Text,
+		}
+
+		// Set GoalType for goals
+		if ke.Type.Type == "goal---header" {
+			ev.GoalType = "header"
+		} else if ke.Type.Type == "penalty---scored" {
+			ev.GoalType = "penalty"
+		} else if ke.Type.Type == "goal" {
+			ev.GoalType = "regular"
+		}
+
+		// Set CardType
+		if ke.Type.Type == "yellow-card" {
+			ev.CardType = "Yellow"
+			ev.Player = extractPlayerFromText(ke.Text, "shown the")
+		} else if ke.Type.Type == "red-card" {
+			ev.CardType = "Red"
+			ev.Player = extractPlayerFromText(ke.Text, "shown the")
+		}
+
+		// Set sub out/in for substitutions
+		if ke.Type.Type == "substitution" {
+			ev.SubOut, ev.SubIn = parseESPNSub(ke.Text)
+		}
+
+		// Extract player from injury delay text
+		if typ == domain.EvInjury {
+			ev.Player = extractPlayerFromText(ke.Text, "injury")
+		}
+
+		// Try to match against existing events
+		if isMatchable {
+			matched := false
+			for i := range existing {
+				if domain.IdentityMatch(existing[i], ev) {
+					// Also check second-level match for cards: same card color
+					if typ == domain.EvCard || typ == "yellow-card" || typ == "red-card" {
+						if existing[i].CardType != "" && existing[i].CardType != ev.CardType {
+							continue
+						}
+					}
+					domain.MergeEvents(&existing[i], &ev)
+					matched = true
+					break
+				}
+			}
+			if matched {
+				continue
+			}
+		}
+
+		// No match — check if this is a duplicate ESPN event (same minute + same type)
+		dedupKey := fmt.Sprintf("%d:%s", minute, string(typ))
+		if espnCreated[dedupKey] {
+			continue
+		}
+
+		// Build final description
 		switch typ {
 		case domain.EvPausa:
-			if !strings.Contains(desc, "drinks break") {
+			if ev.PauseType == "hydration" && !strings.Contains(desc, "drinks break") {
 				desc = "Pausa de hidratación"
 			}
+			ev.Detail = desc
 		case domain.EvInjury:
-			// Keep original text; it already describes the injury
+			ev.Detail = desc
 		case domain.EvContinua:
 			switch lastDelayType {
 			case domain.EvInjury:
@@ -502,23 +571,94 @@ func (p *Provider) mapExtraEvents(data *oldESPN.EnrichData, existing []domain.Ma
 			default:
 				desc = "Se reanuda después de pausa de hidratación"
 			}
+			ev.Detail = desc
 		}
 
-		period := ke.Period.Number
-
-		existing = append(existing, domain.MatchEvent{
-			Minute:       minute,
-			AddedTime:    added,
-			EventType:    typ,
-			Period:       period,
-			Detail:       desc,
-			SortTime:     minute,
-			SortOverload: added,
-		})
-		hash[key] = true
+		existing = append(existing, ev)
+		espnCreated[dedupKey] = true
 	}
 
 	return existing
+}
+
+func classifyPauseType(ke oldESPN.KeyEvent) string {
+	if ke.Type.Type != "start-delay" {
+		return ""
+	}
+	text := strings.ToLower(ke.Text)
+	switch {
+	case containsStr(text, "drink") || containsStr(text, "hydration") || containsStr(text, "agua"):
+		return "hydration"
+	case containsStr(text, "injury"):
+		return "injury"
+	default:
+		return "var"
+	}
+}
+
+func isMatchableType(espnType string, domainType domain.EventType) bool {
+	switch espnType {
+	case "goal", "goal---header", "penalty---scored":
+		return true
+	case "yellow-card", "red-card":
+		return true
+	case "substitution":
+		return true
+	case "halftime":
+		return true
+	case "end-regular-time":
+		return true
+	}
+	return false
+}
+
+func parseESPNSub(text string) (out, in *domain.PlayerRef) {
+	if !containsStr(text, "replaces") {
+		return nil, nil
+	}
+	// Format: "Substitution, Team. PlayerIn replaces PlayerOut."
+	parts := strings.SplitN(text, "replaces", 2)
+	if len(parts) != 2 {
+		return nil, nil
+	}
+	inName := extractPlayerName(parts[0])
+	outName := extractPlayerName(parts[1])
+	if inName != "" {
+		in = &domain.PlayerRef{Name: inName}
+	}
+	if outName != "" {
+		out = &domain.PlayerRef{Name: outName}
+	}
+	return
+}
+
+func extractPlayerFromText(text, after string) *domain.PlayerRef {
+	if text == "" {
+		return nil
+	}
+	// Cards: "Declan Rice (England) is shown the yellow card for a bad foul."
+	if idx := strings.Index(text, "("); idx > 0 {
+		// Try to find the player name after "injury " keyword
+		before := text[:idx]
+		if injIdx := strings.LastIndex(before, "injury "); injIdx >= 0 {
+			name := strings.TrimSpace(before[injIdx+7:])
+			return &domain.PlayerRef{Name: name}
+		}
+		name := strings.TrimSpace(before)
+		return &domain.PlayerRef{Name: name}
+	}
+	return nil
+}
+func extractPlayerName(s string) string {
+	// Find last word before the period
+	s = strings.TrimSpace(s)
+	if idx := strings.LastIndex(s, "."); idx >= 0 {
+		s = s[idx+1:]
+	}
+	s = strings.TrimSpace(s)
+	s = strings.TrimSuffix(s, ".")
+	s = strings.TrimSuffix(s, ")")
+	return strings.TrimSpace(s)
 }
 
 func (p *Provider) mapStats(data *oldESPN.EnrichData, existing domain.StatsByPeriod) domain.StatsByPeriod {
@@ -615,7 +755,14 @@ func classify(ke oldESPN.KeyEvent) domain.EventType {
 			return domain.EvInjury
 		case containsStr(text, "drink") || containsStr(text, "hydration") || containsStr(text, "agua"):
 			return domain.EvPausa
-		case text == "" || containsStr(text, "var") || containsStr(text, "video"):
+		case text == "" || containsVARorVideo(ke.Text):
+			// Empty text start-delay at minute 0 = pre-match delay (rain, etc), not VAR
+			if text == "" {
+				minute, _ := parseClock(ke.Clock.DisplayValue)
+				if minute <= 0 {
+					return domain.EvPausa
+				}
+			}
 			return domain.EvVideoReview
 		default:
 			return domain.EvPausa
@@ -632,11 +779,19 @@ func classify(ke oldESPN.KeyEvent) domain.EventType {
 	case "var":
 		return domain.EvVAR
 	default:
-		if ke.Text != "" && (containsStr(strings.ToLower(ke.Text), "var") || containsStr(strings.ToLower(ke.Text), "video")) {
+		if ke.Text != "" && containsVARorVideo(ke.Text) {
 			return domain.EvVideoReview
 		}
 		return ""
 	}
+}
+
+func containsVARorVideo(text string) bool {
+	lower := strings.ToLower(text)
+	// Must be surrounded by spaces or at boundaries to avoid matching player names
+	// like "Álvarez", "Varela", "Vargas" etc.
+	return strings.Contains(lower, " var ") || strings.HasPrefix(lower, "var ") ||
+		strings.Contains(lower, " review ") || strings.HasPrefix(lower, "review ")
 }
 
 func parseClock(display string) (minute, added int) {

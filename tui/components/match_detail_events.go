@@ -250,14 +250,20 @@ func (md MatchDetail) eventDesc(ev EventItem) string {
 
 	case "VAR":
 		parts = append(parts, mdYellowStyle.Render("VAR"))
-		if ev.Detail != "" {
+		if ev.VarClass != "" {
+			parts = append(parts, " — ")
+			parts = append(parts, varClassLabel(ev.VarClass))
+		} else if ev.Detail != "" {
 			parts = append(parts, " — ")
 			parts = append(parts, ev.Detail)
 		}
 
 	case "VideoReview":
 		parts = append(parts, mdYellowStyle.Render("VAR"))
-		if ev.Detail != "" {
+		if ev.VarClass != "" {
+			parts = append(parts, " — ")
+			parts = append(parts, varClassLabel(ev.VarClass))
+		} else if ev.Detail != "" {
 			parts = append(parts, " — ")
 			parts = append(parts, ev.Detail)
 		}
@@ -327,4 +333,23 @@ func (md MatchDetail) eventDesc(ev EventItem) string {
 	}
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+}
+
+func varClassLabel(class string) string {
+	switch class {
+	case "cardUpgrade":
+		return "Tarjeta subida a roja"
+	case "penaltyNotAwarded":
+		return "Penal no concedido"
+	case "penaltyAwarded":
+		return "Penal concedido"
+	case "goal":
+		return "Gol confirmado"
+	case "goalCancelled":
+		return "Gol anulado"
+	case "offside":
+		return "Fuera de juego"
+	default:
+		return class
+	}
 }

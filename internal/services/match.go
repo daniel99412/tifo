@@ -68,6 +68,9 @@ func (s *MatchService) MatchDetails(ctx context.Context, matchID string, ctxProv
 		}
 	}
 
+	// Post-process: dedup and collapse events from all providers
+	details.Events = domain.DedupEvents(details.Events)
+
 	return details, nil
 }
 

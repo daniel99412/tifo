@@ -196,6 +196,21 @@ type MatchEvent struct {
 	// Internal sorting
 	SortTime     int
 	SortOverload int
+
+	// Enrichment cross-provider
+
+	// ESPN
+	GoalType  string // "header", "penalty", "regular"
+	PauseType string // "hydration", "injury", "var", ""
+	DelayText string // texto original del delay
+
+	// SofaScore
+	VarClass     string // "cardUpgrade", "penaltyNotAwarded", "goalCancelled", "offside", etc.
+	VarConfirmed *bool  // nil | true | false
+
+	// FotMob
+	XG         *float64
+	AssistName string
 }
 
 // EventType enumerates match event types.

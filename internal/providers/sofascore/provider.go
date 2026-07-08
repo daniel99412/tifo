@@ -49,21 +49,12 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 		log.Printf("[sofascore] incidents: %v", err)
 		return fotmobDetails
 	}
+	log.Printf("[sofascore] found eventID=%d with %d incidents", eventID, len(incidents.Incidents))
 
 	out := *fotmobDetails
 
 	if out.Events == nil {
 		out.Events = []domain.MatchEvent{}
-	}
-
-	// Hash existing events by minute (without type — we override pause-like events)
-	eventsByMinute := make(map[int]int)
-	for i, ev := range out.Events {
-		key := ev.Minute
-		if ev.AddedTime > 0 {
-			key = key*1000 + ev.AddedTime
-		}
-		eventsByMinute[key] = i
 	}
 
 	homeName := fotmobDetails.Match.Home
@@ -75,29 +66,32 @@ func (p *Provider) EnrichMatch(matchID int, leagueName string, utcTime time.Time
 			continue
 		}
 
-		key := ev.Minute
-		if ev.AddedTime > 0 {
-			key = key*1000 + ev.AddedTime
-		}
-
-		// If Sofascore has a VAR event and ESPN already put a pause/review at same minute, replace it
-		if ev.EventType == domain.EvVAR || ev.EventType == domain.EvVideoReview {
-			if idx, exists := eventsByMinute[key]; exists {
-				existingType := out.Events[idx].EventType
-				if existingType == domain.EvPausa || existingType == domain.EvVideoReview || existingType == domain.EvVAR || existingType == domain.EvInjury || existingType == domain.EvContinua {
-					out.Events[idx] = ev
-					continue
-				}
+		// Try to match against existing events
+		matched := false
+		for i := range out.Events {
+			if domain.IdentityMatch(out.Events[i], ev) {
+				domain.MergeEvents(&out.Events[i], &ev)
+				matched = true
+				break
 			}
 		}
+		if matched {
+			continue
+		}
 
-		// Dedup by minute:type for non-VAR events
-		if _, exists := eventsByMinute[key]; exists {
+		// No match — check dedup by minute:type
+		dup := false
+		for _, existing := range out.Events {
+			if existing.Minute == ev.Minute && existing.EventType == ev.EventType {
+				dup = true
+				break
+			}
+		}
+		if dup {
 			continue
 		}
 
 		out.Events = append(out.Events, ev)
-		eventsByMinute[key] = len(out.Events) - 1
 	}
 
 	// Update CONT descriptions that follow VAR with SofaScore's specific detail
@@ -143,6 +137,10 @@ func (p *Provider) mapIncident(inc Incident, homeName, awayName string) (domain.
 
 	switch inc.IncidentType {
 	case "varDecision":
+		var varConfirmed *bool
+		if inc.Confirmed != nil {
+			varConfirmed = inc.Confirmed
+		}
 		eventType = domain.EvVAR
 		switch inc.IncidentClass {
 		case "cardUpgrade":
@@ -162,34 +160,99 @@ func (p *Provider) mapIncident(inc Incident, homeName, awayName string) (domain.
 			detail = fmt.Sprintf("VAR: %s", inc.IncidentClass)
 		}
 
+		var player *domain.PlayerRef
+		if inc.Player != nil && inc.Player.Name != "" {
+			player = &domain.PlayerRef{Name: inc.Player.Name}
+		} else if inc.PlayerName != "" {
+			player = &domain.PlayerRef{Name: inc.PlayerName}
+		}
+
+		return domain.MatchEvent{
+			Minute:       minute,
+			AddedTime:    addedTime,
+			EventType:    eventType,
+			Team:         team,
+			Player:       player,
+			Detail:       detail,
+			Period:       period,
+			SortTime:     minute,
+			SortOverload: addedTime,
+			VarClass:     inc.IncidentClass,
+			VarConfirmed: varConfirmed,
+		}, true
+
+	case "substitution":
+		var subOut, subIn *domain.PlayerRef
+		if inc.PlayerOut != nil && inc.PlayerOut.Name != "" {
+			subOut = &domain.PlayerRef{Name: inc.PlayerOut.Name}
+		}
+		if inc.PlayerIn != nil && inc.PlayerIn.Name != "" {
+			subIn = &domain.PlayerRef{Name: inc.PlayerIn.Name}
+		}
+		return domain.MatchEvent{
+			Minute:       minute,
+			AddedTime:    addedTime,
+			EventType:    domain.EvSubstitution,
+			Team:         team,
+			Period:       period,
+			SortTime:     minute,
+			SortOverload: addedTime,
+			SubOut:       subOut,
+			SubIn:        subIn,
+			GoalDesc:     inc.IncidentClass, // "regular" or "injury"
+		}, true
+
+	case "goal":
+		return domain.MatchEvent{
+			Minute:       minute,
+			AddedTime:    addedTime,
+			EventType:    domain.EvGoal,
+			Team:         team,
+			Period:       period,
+			SortTime:     minute,
+			SortOverload: addedTime,
+			GoalDesc:     inc.IncidentClass, // "regular" or "penalty"
+		}, true
+
+	case "card":
+		cardType := ""
+		switch inc.IncidentClass {
+		case "yellow":
+			cardType = "Yellow"
+		case "red":
+			cardType = "Red"
+		default:
+			cardType = inc.IncidentClass
+		}
+		var player *domain.PlayerRef
+		if inc.Player != nil && inc.Player.Name != "" {
+			player = &domain.PlayerRef{Name: inc.Player.Name}
+		} else if inc.PlayerName != "" {
+			player = &domain.PlayerRef{Name: inc.PlayerName}
+		}
+		return domain.MatchEvent{
+			Minute:       minute,
+			AddedTime:    addedTime,
+			EventType:    domain.EvCard,
+			Team:         team,
+			Player:       player,
+			Period:       period,
+			SortTime:     minute,
+			SortOverload: addedTime,
+			CardType:     cardType,
+		}, true
+
+	case "injuryTime":
+		return domain.MatchEvent{
+			Minute:       minute,
+			AddedTime:    inc.Length,
+			EventType:    domain.EvAddedTime,
+			Period:       period,
+			SortTime:     minute,
+			SortOverload: inc.Length,
+		}, true
+
 	default:
 		return domain.MatchEvent{}, false
 	}
-
-	if eventType == "" {
-		return domain.MatchEvent{}, false
-	}
-
-	var player *domain.PlayerRef
-	if inc.Player != nil && inc.Player.Name != "" {
-		player = &domain.PlayerRef{
-			Name: inc.Player.Name,
-		}
-	} else if inc.PlayerName != "" {
-		player = &domain.PlayerRef{
-			Name: inc.PlayerName,
-		}
-	}
-
-	return domain.MatchEvent{
-		Minute:       minute,
-		AddedTime:    addedTime,
-		EventType:    eventType,
-		Team:         team,
-		Player:       player,
-		Detail:       detail,
-		Period:       period,
-		SortTime:     minute,
-		SortOverload: addedTime,
-	}, true
 }

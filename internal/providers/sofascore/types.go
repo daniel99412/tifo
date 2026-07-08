@@ -7,9 +7,12 @@ type Incident struct {
 	IncidentClass      string   `json:"incidentClass"`
 	Player             *Player  `json:"player,omitempty"`
 	PlayerName         string   `json:"playerName,omitempty"`
+	PlayerIn           *Player  `json:"playerIn,omitempty"`
+	PlayerOut          *Player  `json:"playerOut,omitempty"`
 	IsHome             *bool    `json:"isHome,omitempty"`
 	Text               string   `json:"text,omitempty"`
 	Confirmed          *bool    `json:"confirmed,omitempty"`
+	Length             int      `json:"length,omitempty"`
 	ReversedPeriodTime int      `json:"reversedPeriodTime"`
 }
 

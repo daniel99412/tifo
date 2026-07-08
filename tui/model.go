@@ -1188,6 +1188,7 @@ func buildFromDomain(d *domain.MatchDetails, espnStatus string) *components.Matc
 			Period:       ev.Period,
 			SortTime:     ev.SortTime,
 			SortOverload: ev.SortOverload,
+			VarClass:     ev.VarClass,
 		})
 	}
 

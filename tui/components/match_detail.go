@@ -185,6 +185,7 @@ type EventItem struct {
 	Period       int
 	SortTime     int
 	SortOverload int
+	VarClass     string
 }
 
 type H2HData struct {
